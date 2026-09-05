@@ -66,6 +66,8 @@ private let catalog = #"""
     #expect(french["translated"] as? Int == 1)
     #expect(french["missing"] as? Int == 1)
     #expect(french["new"] as? Int == 1)
+    #expect(french["needsReview"] as? Int == 0)
+    #expect(french["needs_review"] == nil)
     let source = try #require(languages.first { $0["language"] as? String == "en" })
     #expect(source["isSource"] as? Bool == true)
     #expect(source["total"] as? Int == 3)

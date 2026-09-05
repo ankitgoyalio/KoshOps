@@ -37,10 +37,6 @@ struct LanguageCoverage: Encodable {
     var translated = 0
     var unsupported = 0
 
-    enum CodingKeys: String, CodingKey {
-        case language, isSource, total, missing, new, translated, unsupported
-        case needsReview = "needs_review"
-    }
 }
 
 struct CatalogInspection: Encodable {

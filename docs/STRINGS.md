@@ -69,7 +69,7 @@ Repeat `--status` for OR matching across `missing`, `new`, `needs_review`, and
 `shouldTranslate: false` entries are omitted from the default listing.
 `--include-excluded` includes them with `excluded: true`; it never changes coverage.
 Coverage counts units per catalog/language, always excluding these entries.
-`total = missing + new + needs_review + translated + unsupported`.
+`total = missing + new + needsReview + translated + unsupported`.
 Human output shows `translated/total`; consumers can compute that fraction when
 `total > 0`. Zero means no eligible units, not 100% coverage. Totals can differ
 between languages because variant structures differ. Coverage is a unit count,
@@ -93,6 +93,10 @@ and exit 1. Nothing updates the project or the catalogs.
 
 Use `--json` for automation. Human wording is not a parsing contract. JSON is
 UTF-8, one object followed by a newline, with no decoration or diagnostics.
+Object keys use camelCase (for example, `needsReview`); status values and CLI
+filters retain Xcode spellings such as `needs_review`. The coverage key was
+corrected before the initial release of this schema.
+
 Arrays are deterministic: catalogs by resolved path, languages and keys
 lexicographically, and variant siblings by stored name. Object field order is
 not a contract. Optional `value`, `issue`, and `projectCheck` fields are omitted
@@ -109,7 +113,7 @@ Languages:
     "languages": [{
       "language": "fr", "isSource": false,
       "total": 3, "missing": 1, "new": 1,
-      "needs_review": 0, "translated": 1, "unsupported": 0
+      "needsReview": 0, "translated": 1, "unsupported": 0
     }]
   }],
   "projectCheck": {
