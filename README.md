@@ -20,13 +20,15 @@ Run the tests with:
 swift test
 ```
 
-## Inspect localization
+## Inspect and export localization
 
 ```sh
 swift run koshops strings languages .
 swift run koshops strings list . --language fr --status missing --status new
 swift run koshops strings languages . --check-project App.xcodeproj --json
+swift run koshops strings export . --language fr --output translations.json
 ```
 
-Inspection is read-only. See [the command and JSON contracts](docs/STRINGS.md)
-for discovery exclusions, coverage counting, variants, and Xcode comparisons.
+Catalogs remain read-only. Export produces editable JSON or CSV handoffs with
+source context and conflict metadata. See [the command and schema contracts](docs/STRINGS.md)
+for discovery, coverage, variants, Xcode comparisons, and translation exports.
