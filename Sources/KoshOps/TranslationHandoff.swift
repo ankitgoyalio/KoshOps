@@ -85,6 +85,14 @@ extension LocalizationWorkflow {
         }
         if output == "-" { return data }
         let url = URL(fileURLWithPath: output).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            throw InspectionError("Output '\(output)' is a directory. Provide a filename with --output, such as '\(url.appendingPathComponent("translations." + format.rawValue).path)'.")
+        }
+        if let extensionFormat = HandoffFormat(rawValue: url.pathExtension.lowercased()), extensionFormat != format {
+            let suggestedName = url.deletingPathExtension().appendingPathExtension(format.rawValue).lastPathComponent
+            throw InspectionError("Output '\(output)' has a .\(url.pathExtension) extension, but the selected format is \(format.rawValue). Use --format \(extensionFormat.rawValue) or name the file '\(suggestedName)'.")
+        }
         // Atomic replacement preserves other hard links; reject catalog paths and symlinks.
         if url.pathExtension == "xcstrings" {
             throw InspectionError("Output '\(output)' is a catalog path. Choose a .json or .csv handoff file.")

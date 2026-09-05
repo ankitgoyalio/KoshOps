@@ -187,13 +187,18 @@ export does not redact user-authored content.
 JSON is the default; `--format json|csv` selects the handoff encoding. This is an
 intentional exception to human-readable output by default: export's primary
 result is a portable, editable file. It is distinct from inspection's `--json`
-report. `--output PATH` / `-o PATH` writes a handoff; omitted output or `-` writes
+report. A `.json` or `.csv` output extension must match the selected format
+(case-insensitive), including the default JSON format. A mismatch fails before
+writing, even with `--overwrite`, and suggests the matching format or filename.
+Extensionless filenames and other extensions do not determine the format.
+`--output PATH` / `-o PATH` writes a handoff; omitted output or `-` writes
 to stdout. Catalog input still requires paths, not stdin. Success emits only
 handoff data to stdout, or a brief file confirmation to stderr when writing a
 file. No prompts, color, or terminal decoration are used; `--no-input` is accepted.
 
 Existing output requires `--overwrite`. All records are validated and serialized
-before any output. New files are staged beside the destination and published
+before any output. A directory output path is rejected with guidance to provide
+a filename, even with `--overwrite`. New files are staged beside the destination and published
 with an exclusive hard link, so an existing file cannot be replaced by a race.
 Overwrite uses atomic file replacement. Output cannot be a `.xcstrings` file or
 a symbolic link. These rules also protect input catalogs from accidental output.

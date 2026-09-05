@@ -517,3 +517,62 @@ func exportUnsupportedSelectionsLeaveOutputUntouched(_ entry: String) throws {
         #expect((record["recordFingerprint"] as? String != first["recordFingerprint"] as? String) == (sourceChanges || destinationChanges))
     }
 }
+
+@Test(arguments: ["Desktop", "Desktop/"], [false, true])
+func exportDirectoryOutputRequestsFilename(_ output: String, _ overwrite: Bool) throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", catalog)
+    try fixture.write("Desktop/keep.txt", "keep me")
+    let result = try fixture.run(["strings", "export", "--language", "fr", "--output", output, "--no-input"] + (overwrite ? ["--overwrite"] : []))
+    #expect(result.status == 1)
+    #expect(result.out.isEmpty)
+    #expect(result.err.contains("is a directory"))
+    #expect(result.err.contains("Provide a filename"))
+    #expect(result.err.contains("--output"))
+    #expect(!result.err.contains("NSCocoaErrorDomain"))
+    #expect(!result.err.contains(".koshops-export-"))
+    #expect(!result.err.contains("--overwrite"))
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("Desktop/keep.txt"), encoding: .utf8) == "keep me")
+    #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.appendingPathComponent("Desktop").path) == ["keep.txt"])
+    #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).allSatisfy { !$0.hasPrefix(".koshops-export-") })
+}
+
+@Test(arguments: ["json", "csv"])
+func exportRejectsConflictingFileExtensions(_ format: String) throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", catalog)
+    let conflicting = format == "json" ? "csv" : "json"
+    // Omit --format for JSON to cover the default format as well.
+    let arguments = ["strings", "export", "--language", "fr", "--no-input"] + (format == "json" ? [] : ["--format", format])
+    for suffix in [conflicting, conflicting.uppercased()] {
+        let path = "translations." + suffix
+        let output = fixture.root.appendingPathComponent(path)
+        let rejected = try fixture.run(arguments + ["--output", path])
+        #expect(rejected.status == 1)
+        #expect(rejected.out.isEmpty)
+        #expect(rejected.err.contains("selected format is \(format)"))
+        #expect(rejected.err.contains("--format \(conflicting)"))
+        #expect(rejected.err.contains("translations.\(format)"))
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+        try fixture.write(path, "existing handoff")
+        let overwrite = try fixture.run(arguments + ["--output", path, "--overwrite"])
+        #expect(overwrite.status == 1)
+        #expect(overwrite.out.isEmpty)
+        #expect(try String(contentsOf: output, encoding: .utf8) == "existing handoff")
+        try FileManager.default.removeItem(at: output)
+    }
+    for path in ["translations." + format, "translations." + format.uppercased(), "translations", "translations.txt", "-"] {
+        let result = try fixture.run(arguments + ["--output", path])
+        #expect(result.status == 0)
+        let text = path == "-" ? result.out : try String(contentsOf: fixture.root.appendingPathComponent(path), encoding: .utf8)
+        if format == "json" { #expect(try units(text).count == 2) }
+        else { #expect(try parseCSV(text).count == 3) }
+        if path == "-" { #expect(result.err.isEmpty) }
+        else {
+            #expect(result.out.isEmpty)
+            try FileManager.default.removeItem(at: fixture.root.appendingPathComponent(path))
+        }
+    }
+}
