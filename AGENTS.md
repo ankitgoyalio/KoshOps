@@ -26,6 +26,15 @@ scripts.
 - Add behavioral tests for user-visible success and failure paths. Cover help or
   parsing behavior when the command surface changes.
 
+## Subagents
+
+For every subagent spawn, explicitly pass the model and reasoning effort from
+the `[agents]` defaults in [`.codex/config.toml`](.codex/config.toml). Use
+`fork_turns="none"` with a self-contained task brief, or a bounded history fork
+when needed; full-history forks inherit the parent model and cannot accept
+these overrides. Apply this policy to nested subagents too. Change these
+settings only when the user explicitly requests it.
+
 ## Completion
 
 Run `swift test` for every code change. For a CLI-surface change, also inspect
