@@ -33,3 +33,20 @@ the affected `--help` output and exercise representative success, user-error,
 and non-interactive paths as applicable. The task is complete when tests pass
 and every relevant item in `docs/CLI_DESIGN.md` is satisfied or an intentional
 exception is documented beside the change.
+
+## Agent skills
+
+### Issue tracker
+
+Track issues and specs in GitHub Issues. Before issue operations, read
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five canonical triage labels. Before triaging, read
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single-context layout. Before exploring domain behavior, read
+`docs/agents/domain.md`.
