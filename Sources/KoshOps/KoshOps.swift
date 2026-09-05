@@ -5,7 +5,8 @@ struct KoshOps: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "koshops",
         abstract: "Automate Xcode asset management.",
-        version: "0.1.0"
+        version: "0.1.0",
+        subcommands: [Strings.self]
     )
 
     @Flag(

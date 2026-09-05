@@ -20,6 +20,13 @@ Run the tests with:
 swift test
 ```
 
-The executable is built with Apple's
-[`swift-argument-parser`](https://github.com/apple/swift-argument-parser). Add new
-commands as `ParsableCommand` types and register them in `KoshOps.configuration`.
+## Inspect localization
+
+```sh
+swift run koshops strings languages .
+swift run koshops strings list . --language fr --status missing --status new
+swift run koshops strings languages . --check-project App.xcodeproj --json
+```
+
+Inspection is read-only. See [the command and JSON contracts](docs/STRINGS.md)
+for discovery exclusions, coverage counting, variants, and Xcode comparisons.
