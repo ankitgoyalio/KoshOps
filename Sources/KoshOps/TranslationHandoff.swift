@@ -49,47 +49,8 @@ extension LocalizationWorkflow {
                 throw handoffError(unit, unit.issue ?? "Unsupported translation structure.")
             }
             if !selectedStatuses.contains(unit.status.rawValue) { continue }
-            let entry = (document["strings"] as! [String: Any])[unit.key] as! [String: Any]
-            guard entry["comment"] == nil || entry["comment"] is String else {
-                throw handoffError(unit, "The developer comment is not text.")
-            }
             let sourceUnits = sources[SourceKey(catalog: unit.catalog, key: unit.key)] ?? []
-            guard !sourceUnits.isEmpty, sourceUnits.allSatisfy({ $0.value != nil && $0.status != .unsupported }) else {
-                throw handoffError(unit, "Source context contains missing or unsupported structures.")
-            }
-            let source: [[String: Any]] = sourceUnits.map {
-                ["variant": variantIdentity($0.variant), "text": $0.value!]
-            }
-            let localizations = entry["localizations"] as? [String: Any] ?? [:]
-            if unit.status == .missing && unit.variant.isEmpty && localizations.values.contains(where: {
-                guard let node = $0 as? [String: Any] else { return true }
-                return node["variations"] != nil || node["substitutions"] != nil
-            }) {
-                throw handoffError(unit, "Missing destination structure cannot safely be inferred from other localizations.")
-            }
-            var destination: Any = localizations[unit.language] ?? NSNull()
-            for variant in unit.variant {
-                destination = ((destination as? [String: Any])?["variations"] as? [String: Any])?[variant.dimension]
-                    .flatMap { ($0 as? [String: Any])?[variant.value] } ?? NSNull()
-            }
-            let sourceContext: [String: Any] = [
-                "sourceLanguage": sourceLanguage, "source": source,
-                "sourceLocalization": localizations[sourceLanguage] ?? NSNull(),
-                "developerComments": entry["comment"] ?? NSNull()
-            ]
-            var record: [String: Any] = [
-                "schemaVersion": 1, "catalog": unit.catalog, "key": unit.key, "language": unit.language,
-                "variant": variantIdentity(unit.variant), "sourceLanguage": sourceLanguage, "source": source,
-                "developerComments": entry["comment"] ?? NSNull(), "status": unit.status.rawValue,
-                "originalTranslation": unit.value as Any? ?? NSNull(),
-                "originalDestination": destination,
-                "sourceFingerprint": try fingerprint(sourceContext),
-                "destinationFingerprint": try fingerprint(destination)
-            ]
-            record["recordFingerprint"] = try fingerprint(record)
-            record["translation"] = unit.value ?? ""
-            record["statusUpdate"] = ""
-            records.append(record)
+            records.append(try handoffRecord(unit, document: document, sourceUnits: sourceUnits))
         }
         if format == .json {
             let data = try canonicalJSON(["schemaVersion": 1, "units": records]) + Data("\n".utf8)
@@ -104,19 +65,63 @@ extension LocalizationWorkflow {
     }
 }
 
-private func handoffError(_ unit: TranslationUnit, _ reason: String) -> InspectionError {
-    InspectionError("Cannot export '\(unit.catalog)' key '\(unit.key)' language '\(unit.language)' variant '\(unit.variant.map { "\($0.dimension)=\($0.value)" }.joined(separator: "/"))': \(reason) Inspect this entry in Xcode or select other languages/statuses.")
+func handoffRecord(_ unit: TranslationUnit, document: [String: Any], sourceUnits: [TranslationUnit]) throws -> [String: Any] {
+    let sourceLanguage = document["sourceLanguage"] as! String
+    let entry = (document["strings"] as! [String: Any])[unit.key] as! [String: Any]
+    guard entry["comment"] == nil || entry["comment"] is String else {
+        throw handoffError(unit, "The developer comment is not text.")
+    }
+    guard !sourceUnits.isEmpty, sourceUnits.allSatisfy({ $0.value != nil && $0.status != .unsupported }) else {
+        throw handoffError(unit, "Source context contains missing or unsupported structures.")
+    }
+    let source: [[String: Any]] = sourceUnits.map {
+        ["variant": variantIdentity($0.variant), "text": $0.value!]
+    }
+    let localizations = entry["localizations"] as? [String: Any] ?? [:]
+    if unit.status == .missing && unit.variant.isEmpty && localizations.values.contains(where: {
+        guard let node = $0 as? [String: Any] else { return true }
+        return node["variations"] != nil || node["substitutions"] != nil
+    }) {
+        throw handoffError(unit, "Missing destination structure cannot safely be inferred from other localizations.")
+    }
+    var destination: Any = localizations[unit.language] ?? NSNull()
+    for variant in unit.variant {
+        destination = ((destination as? [String: Any])?["variations"] as? [String: Any])?[variant.dimension]
+            .flatMap { ($0 as? [String: Any])?[variant.value] } ?? NSNull()
+    }
+    let sourceContext: [String: Any] = [
+        "sourceLanguage": sourceLanguage, "source": source,
+        "sourceLocalization": localizations[sourceLanguage] ?? NSNull(),
+        "developerComments": entry["comment"] ?? NSNull()
+    ]
+    var record: [String: Any] = [
+        "schemaVersion": 1, "catalog": unit.catalog, "key": unit.key, "language": unit.language,
+        "variant": variantIdentity(unit.variant), "sourceLanguage": sourceLanguage, "source": source,
+        "developerComments": entry["comment"] ?? NSNull(), "status": unit.status.rawValue,
+        "originalTranslation": unit.value as Any? ?? NSNull(),
+        "originalDestination": destination,
+        "sourceFingerprint": try fingerprint(sourceContext),
+        "destinationFingerprint": try fingerprint(destination)
+    ]
+    record["recordFingerprint"] = try fingerprint(record)
+    record["translation"] = unit.value ?? ""
+    record["statusUpdate"] = ""
+    return record
 }
 
-private func variantIdentity(_ variants: [Variant]) -> [[String: String]] {
+private func handoffError(_ unit: TranslationUnit, _ reason: String) -> InspectionError {
+    InspectionError("Cannot prepare handoff for '\(unit.catalog)' key '\(unit.key)' language '\(unit.language)' variant '\(unit.variant.map { "\($0.dimension)=\($0.value)" }.joined(separator: "/"))': \(reason) Inspect this entry in Xcode or select other languages/statuses.")
+}
+
+func variantIdentity(_ variants: [Variant]) -> [[String: String]] {
     variants.map { ["dimension": $0.dimension, "value": $0.value] }
 }
 
-private func canonicalJSON(_ value: Any) throws -> Data {
+func canonicalJSON(_ value: Any) throws -> Data {
     try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
 }
 
-private func fingerprint(_ value: Any) throws -> String {
+func fingerprint(_ value: Any) throws -> String {
     SHA256.hash(data: try canonicalJSON(value)).map { String(format: "%02x", $0) }.joined()
 }
 
@@ -130,17 +135,7 @@ private func vendorHandoff(_ records: [[String: Any]]) throws -> (csv: Data, man
     var entries: [[String: Any]] = []
     for record in records {
         let id = "u-" + (record["recordFingerprint"] as! String)
-        let sourceUnits = record["source"] as! [[String: Any]]
-        let source = sourceUnits.map { unit in
-            let label = variantLabel(unit["variant"] as! [[String: String]])
-            let text = unit["text"] as! String
-            return label.isEmpty ? text : "[\(label)] \(text)"
-        }.joined(separator: "\n")
-        let variant = variantLabel(record["variant"] as! [[String: String]])
-        var context: [String] = []
-        if !variant.isEmpty { context.append("Target variant: " + variant) }
-        if let comment = record["developerComments"] as? String, !comment.isEmpty { context.append(comment) }
-        let contextText = context.joined(separator: "\n")
+        let (source, contextText) = vendorCells(record)
         rows.append([id, record["language"] as! String, source, contextText, record["translation"] as! String])
         entries.append(["id": id, "source": source, "context": contextText, "record": record])
     }
@@ -148,4 +143,19 @@ private func vendorHandoff(_ records: [[String: Any]]) throws -> (csv: Data, man
     let csv = rows.map { $0.map(quote).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n"
     let manifest = try canonicalJSON(["schemaVersion": 1, "kind": "vendorManifest", "entries": entries]) + Data("\n".utf8)
     return (Data(csv.utf8), manifest)
+}
+
+func vendorCells(_ record: [String: Any]) -> (source: String, context: String) {
+    let sourceUnits = record["source"] as! [[String: Any]]
+    let source = sourceUnits.map { unit in
+        let label = variantLabel(unit["variant"] as! [[String: String]])
+        let text = unit["text"] as! String
+        return label.isEmpty ? text : "[\(label)] \(text)"
+    }.joined(separator: "\n")
+    let variant = variantLabel(record["variant"] as! [[String: String]])
+    var context: [String] = []
+    if !variant.isEmpty { context.append("Target variant: " + variant) }
+    if let comment = record["developerComments"] as? String, !comment.isEmpty { context.append(comment) }
+    let contextText = context.joined(separator: "\n")
+    return (source, contextText)
 }
