@@ -3,8 +3,8 @@ import Foundation
 
 struct Strings: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Inspect translations, export them for editing, and preview returned changes.",
-        discussion: "Examples:\n  koshops strings languages .\n  koshops strings list --language fr --status missing\n\nExport translations with 'koshops strings export', then preview returned changes with 'koshops strings import --dry-run'. Catalogs are never changed. Run a subcommand with --help for examples and options.",
+        abstract: "Inspect translations, export them for editing, and import returned changes.",
+        discussion: "Examples:\n  koshops strings languages .\n  koshops strings list --language fr --status missing\n\nExport translations with 'koshops strings export', then preview returned changes with 'koshops strings import --dry-run'. Omit --dry-run to apply validated changes to one catalog. Run a subcommand with --help for examples and options.",
         subcommands: [StringsLanguages.self, StringsList.self, StringsExport.self, StringsImport.self]
     )
     mutating func run() throws { throw CleanExit.helpRequest(self) }

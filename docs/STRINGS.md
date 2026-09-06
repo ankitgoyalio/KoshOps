@@ -173,7 +173,7 @@ fields documented in the record table below. Only `translation` and
 `statusUpdate` are editable in a JSON translation file (handoff); identity, source context, original
 state, and fingerprints remain read-only. Explicit status updates are `new`,
 `needs_review`, or `translated`; `missing` is never writable. Changed text requires
-an explicit status update; unchanged records are ignored by the future importer.
+an explicit status update; unchanged records are ignored by import.
 Empty selections produce `units: []`. JSON stdout remains free of diagnostics on
 success. File output requires `--overwrite` to replace an existing file and
 rejects `.csv` extensions, directory paths, symlinks, and catalog paths.
@@ -191,7 +191,7 @@ koshops strings export . --language fr --format csv --manifest manifest.json --n
 `--format csv` produces **a vendor CSV and a companion JSON manifest**. Send the
 CSV to the vendor and retain the manifest locally. The vendor edits only the
 `translation` column. The manifest carries catalog identities, original values,
-and conflict checks for the future import workflow.
+and conflict checks for import.
 
 ### Selection and context
 
@@ -344,20 +344,21 @@ catalog state and verify the identity, language, structure, and translation
 eligibility. Hashes are conflict checks, not cryptographic authentication of a
 handoff's author. They do not authorize arbitrary new identities or new languages.
 
-## Import validation and preview
+## Import validation, preview, and apply
 
 ```sh
 koshops strings import translations.json --dry-run
+koshops strings import translations.json --no-input
 koshops strings import translations.json --destination App --dry-run --json
 cat translations.json | koshops strings import - --dry-run --json --no-input
 koshops strings import returned.csv --format csv --manifest translations.csv.manifest.json --status-update needs_review --dry-run
 ```
 
-Import supports **validation and preview only**. Applying changes is
-unavailable: an invocation with input but without `--dry-run` fails before reading
-or writing catalogs. Bare `strings import` shows help. The input argument is a file
-or `-`; with `--dry-run`, omitted input reads redirected stdin. Terminal stdin is
-never read or prompted. `--no-input` is accepted. `--format` defaults to `json`;
+Import validates all returned records, then applies deliberate changes to one
+catalog. Add `--dry-run` to preview the same complete change plan without writing.
+With no input, `strings import` shows help. The input argument is a file or `-`;
+omitted input reads a redirected file or pipe. Terminal stdin is never read or prompted. `--no-input` is
+accepted. `--format` defaults to `json`;
 filenames do not select the encoding. `--destination` defaults to the current
 directory and must be an existing directory.
 
@@ -372,7 +373,7 @@ the documented record fields. Only `translation` and `statusUpdate` are editable
 Every supplied record is checked for schema, protected-field integrity, identity,
 and eligibility. Unknown keys/languages/variants, source-language records,
 excluded entries, unsupported destinations, and duplicate identities fail the
-whole preview. Duplicate rows are rejected even when identical. Fingerprints
+whole import. Duplicate rows are rejected even when identical. Fingerprints
 are integrity/conflict checks, not signatures or authentication.
 
 A text change requires an explicit `statusUpdate` of `new`, `needs_review`, or
@@ -446,13 +447,63 @@ one UTF-8 object plus a newline:
 
 `originalTranslation` is omitted for missing translations. Changes preserve
 handoff order; an empty preview has `changes: []`. Nothing is emitted until all
-records validate. The report describes only deliberate updates; the importer has
-no catalog write path. Dry runs, validation failures, interruptions, and retries
-leave catalog bytes unchanged. Success emits no stderr diagnostics. Failures
-emit actionable stderr diagnostics and empty stdout. Exit statuses are `0` for
-successful preview/help, `64` for argument/option errors or requests to apply changes,
-and `1` for handoff, manifest, catalog, eligibility, placeholder, or conflict errors.
-There are no prompts, configuration changes, network access, or environment overrides.
+records validate. The report describes only deliberate updates. Dry runs and
+validation failures leave catalog bytes unchanged. Success emits no stderr
+diagnostics. Failures emit actionable stderr diagnostics and empty stdout.
+Exit statuses are `0` for successful preview/apply/help, `64` for argument/option
+errors, and `1` for handoff, manifest, catalog, eligibility, placeholder, conflict,
+multi-catalog application, or write errors. There are no prompts, configuration
+changes, network access, or environment overrides.
+
+### Applying changes and recovery
+
+Without `--dry-run`, import uses the same validation and changes as preview.
+Only catalogs with deliberate changes count toward the single-catalog limit.
+Multiple affected catalogs are rejected before staging or writing; preview still
+supports them. Return records for one catalog at a time (CSV can retain its full
+original companion manifest). An empty change plan succeeds without a write,
+staging file, or lock. No-op catalogs retain their exact bytes and modification
+time.
+
+Apply preserves omitted and unchanged records, source localizations, comments,
+excluded entries, sibling variants, and unrelated or unsupported JSON fields.
+It fills only validated existing empty leaves or permitted absent simple
+translations. Changed catalogs are reserialized as JSON, so whitespace and object
+key order may change. File metadata is copied to the replacement; hard links to
+the original inode retain the original file.
+
+The writer locks the catalog's parent directory against other KoshOps imports,
+copies the catalog to a unique `.koshops-import-*` file in that directory, writes
+and synchronizes the staged contents, checks the live catalog against the exact
+validated bytes, then atomically renames the staging file over the catalog.
+A detected concurrent edit aborts rather than overwriting it. During this write
+window even unrelated edits cause an abort, because publishing an older complete
+snapshot would lose them. Edits made before validation retain the affected-record
+conflict scope described above. The directory lock fails promptly when busy and
+is released automatically when the process exits.
+
+Other tools may not honor the lock. Stop Xcode or other catalog writers while
+applying: the final byte check and rename are separate filesystem operations,
+so an uncoordinated edit in that short interval cannot be ruled out. This is
+atomic process-interruption safety, not a guarantee against hardware failure.
+
+Handled staging, synchronization, or rename failures leave the original catalog
+in place and remove staging files. Process interruption leaves either the complete
+original or the complete updated catalog, and may leave a `.koshops-import-*`
+file. Inspect the catalog before retrying and remove leftover staging files only
+when no import is running. If no replacement occurred, fix the reported cause
+and retry the same handoff. If replacement occurred before interruption or loss
+of the success response, the old handoff is stale: export again, compare the live
+translations with the intended updates, and return only remaining changes.
+Import does not automatically replay stale updates or roll back a completed
+replacement.
+
+Human apply output is a concise primary result on stdout, naming the catalog and
+number of applied changes, or stating that no catalogs changed. `--json` uses the
+preview schema with `dryRun: false` and the actual applied `changes`. Success is
+reported only after replacement succeeds. No confirmation prompt is required:
+the explicit import invocation and review statuses authorize the targeted edits;
+`--dry-run` provides an optional preview.
 
 ### Reading human results
 
@@ -463,6 +514,8 @@ reported as having no translations counted, not as fully translated.
 
 An import preview reports “no changes proposed”, “1 proposed change”, or a
 plural change count, then confirms “No catalogs changed.” It validates the
-returned records; it does not apply them. If the source or catalog translation
+returned records without applying them. An import without `--dry-run` reports
+the applied change count and catalog, or confirms that no catalogs changed.
+If the source or catalog translation
 has changed since export, export again and compare the returned translation
 with the current content before previewing again.

@@ -5,7 +5,7 @@ struct KoshOps: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "koshops",
         abstract: "Inspect and exchange translations in Xcode String Catalogs.",
-        discussion: "Examples:\n  koshops strings languages .\n  koshops strings export . --language fr -o translations.json\n\nStart with 'koshops strings languages' to see languages and coverage. Run 'koshops strings --help' for the translation workflow. Catalogs are never changed.",
+        discussion: "Examples:\n  koshops strings languages .\n  koshops strings export . --language fr -o translations.json\n\nStart with 'koshops strings languages' to see languages and coverage. Run 'koshops strings --help' for the translation workflow. Inspection and export are read-only; import applies changes unless --dry-run is supplied.",
         version: "0.1.0",
         subcommands: [Strings.self]
     )
