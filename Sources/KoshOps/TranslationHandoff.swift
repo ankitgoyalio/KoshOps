@@ -5,6 +5,11 @@ enum HandoffFormat: String {
     case json, csv
 }
 
+struct TranslationExport {
+    let data: Data?
+    let manifestPath: String?
+}
+
 private struct SourceKey: Hashable {
     let catalog: String
     let key: String
@@ -14,7 +19,17 @@ extension LocalizationWorkflow {
     /// Builds and validates the complete handoff before publishing any bytes.
     /// An empty language list means all catalog languages except their sources.
     func export(paths: [String], languages: [String], statuses: [String], format: HandoffFormat,
-                output: String, overwrite: Bool) throws -> Data? {
+                output: String, manifest: String?, overwrite: Bool) throws -> TranslationExport {
+        guard format != .csv || output != "-" || manifest != nil else {
+            throw InspectionError("CSV on stdout requires a companion manifest. Supply --manifest PATH or --output translations.csv.")
+        }
+        guard format == .csv || manifest == nil else {
+            throw InspectionError("--manifest is only used with CSV. Use --format csv or omit --manifest for JSON export.")
+        }
+        let manifestPath = manifest ?? output + ".manifest.json"
+        guard manifestPath != "-" else {
+            throw InspectionError("The manifest must be retained as a file. Supply --manifest PATH; stdout is reserved for CSV.")
+        }
         let inspection = try inspect(paths: paths)
         let unknown = Set(languages).subtracting(inspection.catalogs.flatMap { $0.languages.map(\.language) })
         guard unknown.isEmpty else {
@@ -76,45 +91,16 @@ extension LocalizationWorkflow {
             record["statusUpdate"] = ""
             records.append(record)
         }
-        let data: Data
-        switch format {
-        case .json:
-            data = try canonicalJSON(["schemaVersion": 1, "units": records]) + Data("\n".utf8)
-        case .csv:
-            data = try handoffCSV(records)
+        if format == .json {
+            let data = try canonicalJSON(["schemaVersion": 1, "units": records]) + Data("\n".utf8)
+            if output != "-" { try publishExport([ExportFile(path: output, data: data, fileExtension: "json")], overwrite: overwrite) }
+            return TranslationExport(data: output == "-" ? data : nil, manifestPath: nil)
         }
-        if output == "-" { return data }
-        let url = URL(fileURLWithPath: output).standardizedFileURL
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            throw InspectionError("Output '\(output)' is a directory. Provide a filename with --output, such as '\(url.appendingPathComponent("translations." + format.rawValue).path)'.")
-        }
-        if let extensionFormat = HandoffFormat(rawValue: url.pathExtension.lowercased()), extensionFormat != format {
-            let suggestedName = url.deletingPathExtension().appendingPathExtension(format.rawValue).lastPathComponent
-            throw InspectionError("Output '\(output)' has a .\(url.pathExtension) extension, but the selected format is \(format.rawValue). Use --format \(extensionFormat.rawValue) or name the file '\(suggestedName)'.")
-        }
-        // Atomic replacement preserves other hard links; reject catalog paths and symlinks.
-        if url.pathExtension == "xcstrings" {
-            throw InspectionError("Output '\(output)' is a catalog path. Choose a .json or .csv handoff file.")
-        }
-        do {
-            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
-                throw InspectionError("Output is a symbolic link. Choose a regular handoff file.")
-            }
-            if overwrite {
-                try data.write(to: url, options: [.atomic])
-            } else {
-                // Publish a complete file with an exclusive link, so a race cannot
-                // replace an existing handoff or expose a partially written export.
-                let staging = url.deletingLastPathComponent().appendingPathComponent(".koshops-export-" + UUID().uuidString)
-                defer { try? FileManager.default.removeItem(at: staging) }
-                try data.write(to: staging, options: [.withoutOverwriting])
-                try FileManager.default.linkItem(at: staging, to: url)
-            }
-        } catch {
-            throw InspectionError("Cannot write export '\(output)': \(error). Choose a writable new path or use --overwrite to replace an existing handoff.")
-        }
-        return nil
+        let handoff = try vendorHandoff(records)
+        var outputs = [ExportFile(path: manifestPath, data: handoff.manifest, fileExtension: "json")]
+        if output != "-" { outputs.append(ExportFile(path: output, data: handoff.csv, fileExtension: "csv")) }
+        try publishExport(outputs, overwrite: overwrite)
+        return TranslationExport(data: output == "-" ? handoff.csv : nil, manifestPath: manifestPath)
     }
 }
 
@@ -134,18 +120,32 @@ private func fingerprint(_ value: Any) throws -> String {
     SHA256.hash(data: try canonicalJSON(value)).map { String(format: "%02x", $0) }.joined()
 }
 
-private func handoffCSV(_ records: [[String: Any]]) throws -> Data {
-    let columns = ["schemaVersion", "catalog", "key", "language", "variant", "sourceLanguage", "source", "developerComments", "status", "originalTranslation", "originalDestination", "sourceFingerprint", "destinationFingerprint", "recordFingerprint", "translation", "statusUpdate"]
-    let jsonColumns: Set<String> = ["variant", "source", "developerComments", "originalTranslation", "originalDestination"]
-    func quote(_ value: String) -> String { "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
-    var rows = [columns.joined(separator: ",")]
+/// Render readable context without requiring vendors to edit or understand JSON.
+private func variantLabel(_ variant: [[String: String]]) -> String {
+    variant.map { "\($0["dimension"]!)=\($0["value"]!)" }.joined(separator: "/")
+}
+
+private func vendorHandoff(_ records: [[String: Any]]) throws -> (csv: Data, manifest: Data) {
+    var rows = [["id", "language", "source", "context", "translation"]]
+    var entries: [[String: Any]] = []
     for record in records {
-        rows.append(try columns.map { column in
-            let value = record[column]!
-            let text = jsonColumns.contains(column)
-                ? String(decoding: try canonicalJSON(value), as: UTF8.self) : String(describing: value)
-            return quote(text)
-        }.joined(separator: ","))
+        let id = "u-" + (record["recordFingerprint"] as! String)
+        let sourceUnits = record["source"] as! [[String: Any]]
+        let source = sourceUnits.map { unit in
+            let label = variantLabel(unit["variant"] as! [[String: String]])
+            let text = unit["text"] as! String
+            return label.isEmpty ? text : "[\(label)] \(text)"
+        }.joined(separator: "\n")
+        let variant = variantLabel(record["variant"] as! [[String: String]])
+        var context: [String] = []
+        if !variant.isEmpty { context.append("Target variant: " + variant) }
+        if let comment = record["developerComments"] as? String, !comment.isEmpty { context.append(comment) }
+        let contextText = context.joined(separator: "\n")
+        rows.append([id, record["language"] as! String, source, contextText, record["translation"] as! String])
+        entries.append(["id": id, "source": source, "context": contextText, "record": record])
     }
-    return Data((rows.joined(separator: "\r\n") + "\r\n").utf8)
+    func quote(_ value: String) -> String { "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+    let csv = rows.map { $0.map(quote).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n"
+    let manifest = try canonicalJSON(["schemaVersion": 1, "kind": "vendorManifest", "entries": entries]) + Data("\n".utf8)
+    return (Data(csv.utf8), manifest)
 }

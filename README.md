@@ -26,9 +26,10 @@ swift test
 swift run koshops strings languages .
 swift run koshops strings list . --language fr --status missing --status new
 swift run koshops strings languages . --check-project App.xcodeproj --json
-swift run koshops strings export . --language fr --output translations.json
+swift run koshops strings export . --language fr --format csv --output translations.csv
 ```
 
-Catalogs remain read-only. Export produces editable JSON or CSV handoffs with
-source context and conflict metadata. See [the command and schema contracts](docs/STRINGS.md)
+Catalogs remain read-only. Export defaults to JSON. Use `--format csv` for a
+five-column vendor CSV and companion JSON manifest. Share the CSV and retain
+the manifest locally for the future import workflow. See [the command and schema contracts](docs/STRINGS.md)
 for discovery, coverage, variants, Xcode comparisons, and translation exports.

@@ -94,8 +94,7 @@ and exit 1. Nothing updates the project or the catalogs.
 Use `--json` for automation. Human wording is not a parsing contract. JSON is
 UTF-8, one object followed by a newline, with no decoration or diagnostics.
 Object keys use camelCase (for example, `needsReview`); status values and CLI
-filters retain Xcode spellings such as `needs_review`. The coverage key was
-corrected before the initial release of this schema.
+filters retain Xcode spellings such as `needs_review`.
 
 Arrays are deterministic: catalogs by resolved path, languages and keys
 lexicographically, and variant siblings by stored name. Object field order is
@@ -157,79 +156,154 @@ They operate on identified on-disk catalogs; stdin (`-`) is not accepted because
 discovery and catalog identity require paths. Export/import stream contracts are
 outside this inspection slice.
 
-## Translation export
+## JSON translation export
+
+JSON is the default export format. Use `--format json` explicitly or omit
+`--format`. JSON writes to stdout by default, or to `--output PATH`, and requires
+no companion manifest. `--manifest` is accepted only with `--format csv`.
 
 ```sh
 koshops strings export . --language fr
-koshops strings export Sources Shared --language fr --language de --status new --status needs_review
-koshops strings export A/Labels.xcstrings B/Labels.xcstrings --all-languages --format csv -o translations.csv
-koshops strings export . --language fr --status translated --output handoff.json --overwrite
-koshops strings export . --all-languages --output - --no-input > handoff.json
+koshops strings export . --language fr --format json -o translations.json
 ```
 
-`strings export` requires either repeatable `--language LANGUAGE` or
-`--all-languages`, never both. Source-language units are always excluded per
-catalog, even when explicitly selected. Languages must exist in at least one
-selected catalog; catalogs without a selected language contribute no records.
-It never adds languages. Defaults are `missing`, `new`, and `needs_review`.
-Repeated `--status` values replace the defaults and match individual units with
-OR semantics. `shouldTranslate: false` entries are always excluded.
+The JSON contract is a UTF-8 object
+`{"schemaVersion":1,"units":[...]}` followed by a newline. Each unit contains the
+fields documented in the record table below. Only `translation` and
+`statusUpdate` are editable in a JSON handoff; identity, source context, original
+state, and fingerprints remain read-only. Explicit status updates are `new`,
+`needs_review`, or `translated`; `missing` is never writable. Changed text requires
+an explicit status update; unchanged records are ignored by the future importer.
+Empty selections produce `units: []`. JSON stdout remains free of diagnostics on
+success. File output requires `--overwrite` to replace an existing file and
+rejects `.csv` extensions, directory paths, symlinks, and catalog paths.
 
-Paths, discovery exclusions, ordering, deduplication, and the common selection
-root follow inspection's rules above, including explicit catalog selections.
-For `A/Labels.xcstrings B/Labels.xcstrings`, the identities are
-`A/Labels.xcstrings` and `B/Labels.xcstrings`; for just `A/Labels.xcstrings`, the
-identity is `Labels.xcstrings` and the root is `A`. Use the same relative layout
-beneath the destination root for a later import. No absolute filesystem location
-or selected root is serialized. Catalog text and comments are preserved verbatim;
-export does not redact user-authored content.
+## Vendor CSV translation export
 
-JSON is the default; `--format json|csv` selects the handoff encoding. This is an
-intentional exception to human-readable output by default: export's primary
-result is a portable, editable file. It is distinct from inspection's `--json`
-report. A `.json` or `.csv` output extension must match the selected format
-(case-insensitive), including the default JSON format. A mismatch fails before
-writing, even with `--overwrite`, and suggests the matching format or filename.
-Extensionless filenames and other extensions do not determine the format.
-`--output PATH` / `-o PATH` writes a handoff; omitted output or `-` writes
-to stdout. Catalog input still requires paths, not stdin. Success emits only
-handoff data to stdout, or a brief file confirmation to stderr when writing a
-file. No prompts, color, or terminal decoration are used; `--no-input` is accepted.
+```sh
+koshops strings export . --language fr --format csv -o translations.csv
+koshops strings export . --language ar --status new --format csv -o translations.csv
+koshops strings export A/Labels.xcstrings B/Labels.xcstrings --all-languages --format csv -o translations.csv
+koshops strings export . --language fr --format csv -o translations.csv --manifest private/manifest.json
+koshops strings export . --language fr --format csv --manifest manifest.json --no-input > translations.csv
+```
 
-Existing output requires `--overwrite`. All records are validated and serialized
-before any output. A directory output path is rejected with guidance to provide
-a filename, even with `--overwrite`. New files are staged beside the destination and published
-with an exclusive hard link, so an existing file cannot be replaced by a race.
-Overwrite uses atomic file replacement. Output cannot be a `.xcstrings` file or
-a symbolic link. These rules also protect input catalogs from accidental output.
-Failure leaves an existing handoff unchanged. Interruption can leave a hidden
-`.koshops-export-*` staging file, which can be removed; the final path is either
-absent, the old file, or the complete new handoff. Retrying requires `--overwrite`
-if publication already succeeded. There is no `--dry-run` for this operation:
-stdout is the default preview and catalog files are never edited.
+`--format csv` produces **a vendor CSV and a companion JSON manifest**. Send the
+CSV to the vendor and retain the manifest locally. The vendor edits only the
+`translation` column. The manifest carries catalog identities, original values,
+and conflict checks for the future import workflow.
+
+### Selection and context
+
+Require either repeatable `--language LANGUAGE` or `--all-languages`, never both.
+Source-language units are always excluded per catalog, even when explicitly
+selected. Languages must exist in at least one selected catalog; catalogs without
+a selected language contribute no rows. No new languages are inferred. Default
+statuses are `missing`, `new`, and `needs_review`. Repeated `--status` values
+replace defaults and match individual variants with OR semantics. Entries with
+`shouldTranslate: false` are always excluded.
+
+Discovery, ordering, exclusions, and common-root identities follow inspection's
+rules above. For `A/Labels.xcstrings B/Labels.xcstrings`, manifest identities are
+`A/Labels.xcstrings` and `B/Labels.xcstrings`; selecting only `A/Labels.xcstrings`
+makes the identity `Labels.xcstrings` beneath root `A`. Retain that relative
+layout for a later import. No absolute filesystem paths are serialized as
+metadata. User-authored text and developer comments are preserved verbatim.
 
 Unsupported destination records within the selected language/exclusion scope
-fail even with a status filter, since their status cannot be safely determined.
-Selected records also fail for unsupported/missing source context or non-text
-comments. Existing nested plural/device leaves are exported separately; absent
-sibling variants are never invented. A whole missing destination is rejected
-when another localization for that key contains variations/substitutions, even
-when the source falls back to the key. An existing empty variant leaf can be
-exported as missing because its identity already exists. Unsupported unselected
-languages and excluded entries do not prevent export, unless needed as source
-context. No subset is emitted on failure.
+fail even with a status filter because their status is unknown. Selected records
+also fail for unsupported/missing source context or non-text comments. Existing
+nested plural/device leaves are selected individually; absent sibling variants
+are never invented. A whole missing destination is rejected when another
+localization for the key contains variations/substitutions, even if the source
+falls back to the key. Existing empty variant leaves can be exported as missing.
+Unsupported unselected languages and excluded entries do not prevent export,
+unless needed as source context. No subset is emitted on failure.
 
-Exit statuses: `0` success (including an empty selection), `64` invalid command
-arguments or missing/conflicting language flags, `1` catalog, language-selection,
-unsupported-record, or output failure. Expected failures are actionable stderr
-messages with empty stdout. `-h`/`--help` exits `0`; incomplete export explains the
-required language flags and points to help.
+### Files, streams, and safety
 
-## Translation handoff contract, version 1
+`--output PATH` / `-o PATH` selects the CSV file. The default manifest path is the
+complete output filename plus `.manifest.json`, for example
+`translations.csv.manifest.json`. `--manifest PATH` overrides it; the parent
+directory must already exist. This lets you retain metadata in a separate folder.
 
-JSON is a UTF-8 object `{"schemaVersion":1,"units":[...]}` followed by a newline.
-An empty export has `units: []`. Each unit has all the following fields, including
-explicit JSON nulls. Object field order is not significant.
+Omitted output or `--output -` emits CSV to stdout and requires `--manifest PATH`.
+The manifest cannot use stdout. Diagnostics and confirmation of the manifest
+location go to stderr; stdout contains only CSV. No prompts or decoration are
+used; `--no-input` is accepted. Catalog input still requires on-disk paths.
+
+The CSV and manifest must use separate regular-file destinations. Directory,
+symbolic-link, catalog (`.xcstrings`), and conflicting extension destinations
+fail with actionable guidance. Recognized `.csv`/`.json` extensions are checked
+case-insensitively against each file's role, even with `--overwrite`. CSV requires
+`.csv` and the manifest requires `.json`. Extensionless filenames and other
+extensions are permitted; they never select the encoding.
+
+If either destination exists, `--overwrite` is required. Both paths are checked,
+existing files backed up, and both outputs staged before publishing. Handled
+publication failures restore earlier writes; recovery failures report the
+retained backup path. File publication is atomic individually, not across both
+files. Interruptions can leave `.koshops-export-*` staging files and
+`.koshops-backup-*` copies beside the outputs, or a mixed old/new pair. Keep any
+backups needed for recovery, regenerate the pair before sharing, and remove
+leftovers only after checking both files. Do not replace a manifest while its
+CSV is with a vendor. Keep each issued pair until its return is processed.
+For stdout, the manifest is saved before emitting CSV; an interrupted or broken
+pipe may yield incomplete CSV, which must be regenerated.
+
+There is no catalog mutation or `--dry-run` in export. Exit `0` means success,
+including an empty selection (CSV header and an empty manifest). Exit `64` means
+invalid arguments, conflicting/missing language flags, unsupported format, or
+stdout without a manifest path. Exit `1` means catalog, language-selection,
+unsupported-record, or file failure. `-h`/`--help` exits `0`.
+
+### Vendor CSV contract, version 1
+
+UTF-8 without BOM, CRLF record separators, one row per selected unit. Every cell
+is quoted; embedded quotes are doubled. Commas, quotes, CR/LF, and Unicode survive
+CSV decoding. The header is exactly these five field names:
+
+| Column | Meaning |
+| --- | --- |
+| `id` | Opaque stable record reference; do not edit. |
+| `language` | Target language; do not edit. |
+| `source` | Read-only source text. Simple sources are verbatim. Structured sources include all source leaves, each prefixed by `[dimension=value/...]` and separated by newlines. |
+| `context` | Read-only target variant label (`Target variant: dimension=value/...`) followed by developer comments, separated by a newline when both exist. |
+| `translation` | The only editable field; initially existing destination text, or empty for missing. |
+
+IDs are `u-` followed by the protected record fingerprint. They differ across
+catalogs, keys, languages, and variants and change when protected source or
+destination state changes. Row order does not define identity. The prefix keeps
+IDs textual in spreadsheet tools. Do not edit IDs or context, and retain all five
+columns. Missing/omitted rows must never imply deletion in a future importer.
+No Xcode statuses, catalog paths, fingerprints, or nested JSON cells are exposed
+to the vendor. Structured source context is descriptive; it never guesses a
+mapping between different source and target plural categories.
+
+CSV content is literal text. Spreadsheet editors must retain it as text rather
+than evaluate formulas or coerce values; formula escaping is not applied because
+it would change translations. Vendors need not see or modify the manifest.
+
+### Companion manifest contract, version 1
+
+UTF-8 JSON followed by a newline:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "vendorManifest",
+  "entries": [
+    {"id": "u-...", "source": "Source text", "context": "Developer comment", "record": {}}
+  ]
+}
+```
+
+The example omits `record` contents for brevity; each real `record` has every field
+in the following table. Entry `source` and `context` are the exact original CSV
+cells. The corresponding original `language` and `translation` are in `record`.
+`id` must equal `u-` plus `record.recordFingerprint`. Thus the manifest retains
+every original CSV cell and the detailed catalog state without burdening vendors.
+All manifest fields are read-only; schema field names are camelCase.
 
 | Field | Type and meaning |
 | --- | --- |
@@ -245,14 +319,21 @@ explicit JSON nulls. Object field order is not significant.
 | `sourceFingerprint` | Lowercase hex SHA-256 of source context, defined below. |
 | `destinationFingerprint` | Lowercase hex SHA-256 of `originalDestination`. |
 | `recordFingerprint` | Lowercase hex SHA-256 binding all protected record fields, defined below. |
-| `translation` | **Editable** string, initially original text or `""` for missing. |
-| `statusUpdate` | **Editable** string, initially `""`; explicit updates are only `new`, `needs_review`, or `translated`. `missing` is never writable. |
+| `translation` | Editable in JSON export; read-only baseline in the manifest. Initially original text or `""` for missing. |
+| `statusUpdate` | Editable in JSON export; blank read-only baseline in the manifest. Explicit updates are only `new`, `needs_review`, or `translated`. `missing` is never writable. |
 
-Only `translation` and `statusUpdate` may be edited. The import contract requires
-changed text to have an explicit status update, permits status-only changes,
-rejects empty translations, and ignores wholly unchanged records. The original
-status never implicitly approves edited text. Import is a subsequent slice;
-this command only exports the contract and does not apply edits.
+
+### Future import requirements
+
+Import is not yet implemented. For CSV, the returned file and its original manifest will
+both be required. An importer must match IDs, reject unknown/duplicate IDs and
+protected-cell edits, verify the manifest and live catalog fingerprints, then
+apply only deliberate translation changes. The manifest's reserved `statusUpdate`
+is blank; vendors never set it. A future explicit import option such as
+`--status-update needs_review` will choose the state for changed translations.
+That option is a planned contract, not an available command today. Changed text
+must never inherit the exported original approval. Unchanged or omitted records
+must remain untouched; all normal import validation still applies.
 
 Fingerprint serialization uses Foundation `JSONSerialization` with
 `sortedKeys`, `withoutEscapingSlashes`, and `fragmentsAllowed`, UTF-8, no whitespace
@@ -274,21 +355,3 @@ protected-field edits, then compare source/destination fingerprints with live
 catalog state and verify the identity, language, structure, and translation
 eligibility. Hashes are conflict checks, not cryptographic authentication of a
 handoff's author. They do not authorize arbitrary new identities or new languages.
-
-CSV is UTF-8 without a BOM, one header followed by one row per unit, using CRLF
-record separators. The columns are exactly the fields in this order:
-
-```text
-schemaVersion,catalog,key,language,variant,sourceLanguage,source,developerComments,status,originalTranslation,originalDestination,sourceFingerprint,destinationFingerprint,recordFingerprint,translation,statusUpdate
-```
-
-`schemaVersion` is decimal `1`. `variant`, `source`, `developerComments`,
-`originalTranslation`, and `originalDestination` cells contain JSON literals;
-this preserves null versus empty text and nested structures without additional
-columns. All other cells contain their literal string values. Every data cell is
-CSV-quoted and embedded quotes are doubled, preserving commas, quotes, CR/LF,
-and Unicode. Read the CSV layer first, then JSON-decode the five JSON-valued
-columns and parse `schemaVersion` as an integer to recover exactly the JSON unit.
-An empty export contains the header only. Spreadsheet editors must retain text
-values exactly and must not evaluate cell contents as formulas; no spreadsheet
-formula escaping is applied because it would change the handoff's text contract.

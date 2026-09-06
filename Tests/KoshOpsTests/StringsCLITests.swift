@@ -266,106 +266,6 @@ func malformedCatalogsFailWithoutPartialOutput(_ malformed: String) throws {
     #expect(try String(contentsOf: fixture.root.appendingPathComponent("A.xcstrings"), encoding: .utf8) == catalog)
 }
 
-@Test func exportDefaultsAndReadOnlyContext() throws {
-    let fixture = try Fixture()
-    defer { fixture.remove() }
-    try fixture.write("Localizable.xcstrings", catalog)
-    let result = try fixture.run(["strings", "export", "--language", "fr", "--no-input"])
-    #expect(result.status == 0)
-    #expect(result.err.isEmpty)
-    let selected = try units(result.out)
-    #expect(selected.count == 2)
-    #expect(Set(selected.compactMap { $0["key"] as? String }) == ["Missing", "New"])
-    let missing = try #require(selected.first { $0["key"] as? String == "Missing" })
-    #expect(missing["status"] as? String == "missing")
-    #expect(missing["translation"] as? String == "")
-    #expect(missing["originalTranslation"] is NSNull)
-    #expect(missing["statusUpdate"] as? String == "")
-    #expect(missing["sourceLanguage"] as? String == "en")
-    let source = try #require(missing["source"] as? [[String: Any]])
-    #expect(source.first?["text"] as? String == "Missing")
-    #expect(missing["sourceFingerprint"] is String)
-    #expect(missing["destinationFingerprint"] is String)
-    #expect(missing["recordFingerprint"] is String)
-    #expect(try String(contentsOf: fixture.root.appendingPathComponent("Localizable.xcstrings"), encoding: .utf8) == catalog)
-}
-
-@Test func exportDoesNotGuessMissingStructuredDestinations() throws {
-    let fixture = try Fixture()
-    defer { fixture.remove() }
-    try fixture.write("Localizable.xcstrings", #"""
-    {"version":"1.0","sourceLanguage":"en","strings":{
-      "Count":{"localizations":{"de":{"variations":{"plural":{"other":{"stringUnit":{"state":"new","value":"Dinge"}}}}}}},
-      "Anchor":{"localizations":{"fr":{"stringUnit":{"state":"translated","value":"Ancre"}}}}
-    }}
-    """#)
-    let result = try fixture.run(["strings", "export", "--language", "fr"])
-    #expect(result.status == 1)
-    #expect(result.out.isEmpty)
-    #expect(result.err.contains("structure"))
-    #expect(result.err.contains("Count"))
-}
-
-@Test func exportVariantsCatalogsAndCSVParity() throws {
-    let fixture = try Fixture()
-    defer { fixture.remove() }
-    let text = #"""
-    {"version":"1.0","sourceLanguage":"en","strings":{
-      "Count,\"項目\"\nnext":{"comment":"Developer, \"note\"\n日本語","localizations":{
-        "en":{"variations":{"plural":{
-          "one":{"stringUnit":{"state":"translated","value":"One item"}},
-          "other":{"stringUnit":{"state":"translated","value":"Many items"}}
-        }}},
-        "fr":{"variations":{"plural":{
-          "one":{"stringUnit":{"state":"new","value":"Un, \"élément\"\n次"}},
-          "other":{"stringUnit":{"state":"translated","value":"Plusieurs"}},
-          "few":{}
-        }}}
-      }},
-      "Review":{"localizations":{"fr":{"stringUnit":{"state":"needs_review","value":"Revoir"}}}},
-      "Excluded":{"shouldTranslate":false,"localizations":{"fr":{"substitutions":{}}}}
-    }}
-    """#
-    try fixture.write("A/Labels.xcstrings", text)
-    try fixture.write("B/Labels.xcstrings", text)
-    let arguments = ["strings", "export", "A/Labels.xcstrings", "B/Labels.xcstrings", "--all-languages"]
-    let json = try fixture.run(arguments)
-    #expect(json.status == 0)
-    #expect(json.err.isEmpty)
-    #expect(!json.out.contains(fixture.root.path))
-    let selected = try units(json.out)
-    #expect(selected.count == 6)
-    #expect(Set(selected.compactMap { $0["catalog"] as? String }) == ["A/Labels.xcstrings", "B/Labels.xcstrings"])
-    #expect(selected.allSatisfy { $0["language"] as? String == "fr" })
-    let new = try #require(selected.first { $0["status"] as? String == "new" })
-    #expect(new["variant"] as? [[String: String]] == [["dimension": "plural", "value": "one"]])
-    #expect(new["developerComments"] as? String == "Developer, \"note\"\n日本語")
-    #expect(new["translation"] as? String == "Un, \"élément\"\n次")
-    #expect((new["source"] as? [[String: Any]])?.count == 2)
-    let csv = try fixture.run(arguments + ["--format", "csv", "--output", "-", "--no-input"])
-    #expect(csv.status == 0)
-    #expect(csv.err.isEmpty)
-    let rows = try parseCSV(csv.out)
-    #expect(rows.count == selected.count + 1)
-    let header = try #require(rows.first)
-    let jsonColumns: Set<String> = ["schemaVersion", "variant", "source", "developerComments", "originalTranslation", "originalDestination"]
-    let decoded = try rows.dropFirst().map { row -> [String: Any] in
-        #expect(row.count == header.count)
-        return try Dictionary(uniqueKeysWithValues: zip(header, row).map { column, value in
-            (column, jsonColumns.contains(column) ? try JSONSerialization.jsonObject(with: Data(value.utf8), options: [.fragmentsAllowed]) : value as Any)
-        })
-    }
-    #expect(NSArray(array: decoded).isEqual(to: selected))
-    let combined = try fixture.run(arguments + ["--status", "new", "--status", "translated"])
-    #expect(combined.status == 0)
-    let combinedUnits = try units(combined.out)
-    #expect(combinedUnits.count == 4)
-    #expect(Set(combinedUnits.compactMap { $0["status"] as? String }) == ["new", "translated"])
-    let source = try fixture.run(["strings", "export", "--language", "en"])
-    #expect(source.status == 0)
-    #expect(try units(source.out).isEmpty)
-}
-
 // Independent reader used only to verify the public CSV wire format.
 private func parseCSV(_ text: String) throws -> [[String]] {
     var rows: [[String]] = []
@@ -398,181 +298,297 @@ private func parseCSV(_ text: String) throws -> [[String]] {
     return rows
 }
 
-@Test func exportOutputProtectionAndCLIUsage() throws {
+@Test func vendorExportSeparatesEditableCSVFromManifest() throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
     try fixture.write("Labels.xcstrings", catalog)
-    for option in ["--help", "-h"] {
-        let help = try fixture.run(["strings", "export", option])
-        #expect(help.status == 0)
-        #expect(help.err.isEmpty)
-        #expect(help.out.contains("--all-languages"))
-        #expect(help.out.contains("--overwrite"))
-        #expect(help.out.contains("Examples:"))
-    }
-    for flags in [[], ["--no-input"], ["--language"], ["--language", "fr", "--all-languages"], ["--all-languages", "--format", "xml"], ["--all-languages", "--status", "missing,translated"]] {
-        let result = try fixture.run(["strings", "export"] + flags)
-        #expect(result.status == 64)
+    let result = try fixture.run(["strings", "export", "--format", "csv", "--language", "fr", "-o", "translations.csv", "--no-input"])
+    #expect(result.status == 0)
+    #expect(result.out.isEmpty)
+    #expect(result.err.contains("translations.csv"))
+    #expect(result.err.contains("translations.csv.manifest.json"))
+    let csv = try String(contentsOf: fixture.root.appendingPathComponent("translations.csv"), encoding: .utf8)
+    let rows = try parseCSV(csv)
+    #expect(rows.first == ["id", "language", "source", "context", "translation"])
+    #expect(rows.count == 3)
+    #expect(rows[1][1] == "fr")
+    #expect(rows[1][2] == "Missing")
+    #expect(rows[1][4] == "")
+    #expect(rows[2][4] == "Nouveau")
+    let manifestData = try Data(contentsOf: fixture.root.appendingPathComponent("translations.csv.manifest.json"))
+    let manifest = try #require(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+    #expect(manifest["schemaVersion"] as? Int == 1)
+    #expect(manifest["kind"] as? String == "vendorManifest")
+    let entries = try #require(manifest["entries"] as? [[String: Any]])
+    #expect(entries.count == 2)
+    #expect(entries.map { $0["id"] as? String } == rows.dropFirst().map { Optional($0[0]) })
+    let original = try #require(entries[0]["record"] as? [String: Any])
+    #expect(original["catalog"] as? String == "Labels.xcstrings")
+    #expect(original["originalDestination"] is NSNull)
+    #expect(original["sourceFingerprint"] is String)
+    #expect(original["destinationFingerprint"] is String)
+    #expect(original["statusUpdate"] as? String == "")
+    #expect(!csv.contains("Labels.xcstrings"))
+    #expect(!String(decoding: manifestData, as: UTF8.self).contains(fixture.root.path))
+}
+
+private func manifestEntries(_ fixture: Fixture, path: String = "translations.csv.manifest.json") throws -> [[String: Any]] {
+    let data = try Data(contentsOf: fixture.root.appendingPathComponent(path))
+    let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    return try #require(object["entries"] as? [[String: Any]])
+}
+
+@Test func vendorVariantsAndMultipleCatalogsPreserveContext() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let text = #"""
+    {"version":"1.0","sourceLanguage":"en","strings":{
+      "Count":{"comment":"Developer, \"note\"\n日本語","localizations":{
+        "en":{"variations":{"plural":{
+          "one":{"stringUnit":{"state":"translated","value":"One item"}},
+          "other":{"stringUnit":{"state":"translated","value":"Many items"}}
+        }}},
+        "fr":{"variations":{"device":{"iphone":{"variations":{"plural":{
+          "one":{"stringUnit":{"state":"new","value":"Un, \"élément\"\n次"}},
+          "other":{"stringUnit":{"state":"translated","value":"Plusieurs"}},
+          "few":{}
+        }}}}}}
+      }},
+      "Review":{"localizations":{"fr":{"stringUnit":{"state":"needs_review","value":"Revoir"}}}},
+      "Excluded":{"shouldTranslate":false,"localizations":{"fr":{"substitutions":{}}}}
+    }}
+    """#
+    try fixture.write("A/Labels.xcstrings", text)
+    try fixture.write("B/Labels.xcstrings", text)
+    let args = ["strings", "export", "--format", "csv", "A/Labels.xcstrings", "B/Labels.xcstrings", "--all-languages", "-o", "translations.csv"]
+    let result = try fixture.run(args)
+    #expect(result.status == 0)
+    let entries = try manifestEntries(fixture)
+    let records = try entries.map { try #require($0["record"] as? [String: Any]) }
+    #expect(records.count == 6)
+    #expect(Set(records.compactMap { $0["catalog"] as? String }) == ["A/Labels.xcstrings", "B/Labels.xcstrings"])
+    #expect(records.allSatisfy { $0["language"] as? String == "fr" })
+    #expect(Set(entries.compactMap { $0["id"] as? String }).count == 6)
+    let csv = try String(contentsOf: fixture.root.appendingPathComponent("translations.csv"), encoding: .utf8)
+    let rows = try parseCSV(csv)
+    #expect(rows.count == 7)
+    let new = try #require(rows.dropFirst().first { $0[4] == "Un, \"élément\"\n次" })
+    #expect(new[2] == "[plural=one] One item\n[plural=other] Many items")
+    #expect(new[3] == "Target variant: device=iphone/plural=one\nDeveloper, \"note\"\n日本語")
+    #expect(!csv.contains("Labels.xcstrings"))
+    let filtered = try fixture.run(args + ["--status", "new", "--status", "translated", "--overwrite"])
+    #expect(filtered.status == 0)
+    let filteredRecords = try manifestEntries(fixture).map { try #require($0["record"] as? [String: Any]) }
+    #expect(filteredRecords.count == 4)
+    #expect(Set(filteredRecords.compactMap { $0["status"] as? String }) == ["new", "translated"])
+    let source = try fixture.run(["strings", "export", "--format", "csv", "--language", "en", "-o", "translations.csv", "--overwrite"])
+    #expect(source.status == 0)
+    #expect(try manifestEntries(fixture).isEmpty)
+    #expect(try parseCSV(String(contentsOf: fixture.root.appendingPathComponent("translations.csv"), encoding: .utf8)).count == 1)
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("A/Labels.xcstrings"), encoding: .utf8) == text)
+}
+
+@Test func vendorOutputPathsAndOverwriteProtection() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", catalog)
+    let args = ["strings", "export", "--format", "csv", "--language", "fr", "--no-input"]
+    for flags in [
+        ["-o", "translations.json"], ["-o", "translations.JSON"], ["-o", "translations.json", "--overwrite"],
+        ["-o", "translations.csv", "--manifest", "manifest.csv"],
+        ["-o", "Labels.xcstrings"], ["-o", "Labels.xcstrings", "--overwrite"],
+        ["-o", "."], ["-o", "./", "--overwrite"],
+        ["-o", "translations.csv", "--manifest", "."],
+        ["-o", "same", "--manifest", "./same"], ["-o", "SAME", "--manifest", "same", "--overwrite"], ["--manifest", "-"],
+        ["-o", "absent/file.csv"], ["-o", "translations.csv", "--manifest", "absent/manifest.json"]
+    ] {
+        if flags.contains("SAME"), try fixture.root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]).volumeSupportsCaseSensitiveNames == true { continue }
+        let result = try fixture.run(args + flags)
+        #expect(result.status == 1)
         #expect(result.out.isEmpty)
         #expect(result.err.contains("Error:"))
-        #expect(result.err.contains("--help"))
+        if flags.contains(".") || flags.contains("./") {
+            #expect(result.err.contains("is a directory"))
+            #expect(result.err.contains("Provide a filename"))
+        }
+        if flags.contains("translations.json") || flags.contains("translations.JSON") {
+            #expect(result.err.contains("requires csv"))
+            #expect(result.err.contains("translations.csv"))
+        }
+        #expect(!result.err.contains("NSCocoaErrorDomain"))
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("translations.csv").path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("translations.csv.manifest.json").path))
     }
-    let unknown = try fixture.run(["strings", "export", "--language", "zz"])
-    #expect(unknown.status == 1)
-    #expect(unknown.out.isEmpty)
-    #expect(unknown.err.contains("strings languages"))
-    let args = ["strings", "export", "--language", "fr", "--output", "handoff.json", "--no-input"]
-    let created = try fixture.run(args)
-    #expect(created.status == 0)
-    #expect(created.out.isEmpty)
-    #expect(created.err.contains("handoff.json"))
-    let handoff = fixture.root.appendingPathComponent("handoff.json")
-    #expect(try units(String(contentsOf: handoff, encoding: .utf8)).count == 2)
-    try fixture.write("handoff.json", "previous handoff")
-    let protected = try fixture.run(args)
+    try fixture.write("translations.csv", "previous csv")
+    try fixture.write("translations.csv.manifest.json", "previous manifest")
+    let protected = try fixture.run(args + ["-o", "translations.csv"])
     #expect(protected.status == 1)
-    #expect(protected.out.isEmpty)
     #expect(protected.err.contains("--overwrite"))
-    #expect(try String(contentsOf: handoff, encoding: .utf8) == "previous handoff")
-    let replaced = try fixture.run(args + ["--overwrite"])
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("translations.csv"), encoding: .utf8) == "previous csv")
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("translations.csv.manifest.json"), encoding: .utf8) == "previous manifest")
+    let replaced = try fixture.run(args + ["-o", "translations.csv", "--overwrite"])
     #expect(replaced.status == 0)
-    #expect(replaced.out.isEmpty)
-    #expect(try units(String(contentsOf: handoff, encoding: .utf8)).count == 2)
-    let catalogOutput = try fixture.run(["strings", "export", "--language", "fr", "-o", "Labels.xcstrings", "--overwrite"])
-    #expect(catalogOutput.status == 1)
-    #expect(catalogOutput.out.isEmpty)
-    #expect(catalogOutput.err.contains("Choose a .json or .csv"))
-    try FileManager.default.createSymbolicLink(atPath: fixture.root.appendingPathComponent("alias.json").path, withDestinationPath: "Labels.xcstrings")
-    let symlink = try fixture.run(["strings", "export", "--language", "fr", "-o", "alias.json", "--overwrite"])
+    #expect(try manifestEntries(fixture).count == 2)
+    // Manifest must remain unchanged when preparing the second file fails.
+    let retained = try Data(contentsOf: fixture.root.appendingPathComponent("translations.csv.manifest.json"))
+    let failure = try fixture.run(args + ["-o", "absent/file.csv", "--manifest", "translations.csv.manifest.json", "--overwrite"])
+    #expect(failure.status == 1)
+    #expect(failure.out.isEmpty)
+    #expect(try Data(contentsOf: fixture.root.appendingPathComponent("translations.csv.manifest.json")) == retained)
+    try FileManager.default.createSymbolicLink(atPath: fixture.root.appendingPathComponent("alias.csv").path, withDestinationPath: "Labels.xcstrings")
+    let symlink = try fixture.run(args + ["-o", "alias.csv", "--overwrite"])
     #expect(symlink.status == 1)
     #expect(symlink.err.contains("symbolic link"))
     #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == catalog)
-    let badOutput = try fixture.run(["strings", "export", "--language", "fr", "-o", "absent/handoff.json"])
-    #expect(badOutput.status == 1)
-    #expect(badOutput.out.isEmpty)
-    #expect(badOutput.err.contains("writable"))
     #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).allSatisfy { !$0.hasPrefix(".koshops-export-") })
+}
+
+@Test func vendorStdoutAndCLIUsage() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", catalog)
+    for help in ["--help", "-h"] {
+        let result = try fixture.run(["strings", "export", "--format", "csv", help])
+        #expect(result.status == 0)
+        #expect(result.out.contains("--manifest"))
+        #expect(result.out.contains("Examples:"))
+        #expect(result.err.isEmpty)
+    }
+    for flags in [[], ["--language"], ["--language", "fr"], ["--language", "fr", "--all-languages"], ["--all-languages", "--format", "xml"], ["--all-languages", "--status", "bogus"]] {
+        let result = try fixture.run(["strings", "export", "--format", "csv"] + flags)
+        #expect(result.status == 64)
+        #expect(result.out.isEmpty)
+        #expect(result.err.contains("--help"))
+    }
+    let unknown = try fixture.run(["strings", "export", "--format", "csv", "--language", "zz", "--manifest", "private.json"])
+    #expect(unknown.status == 1)
+    #expect(unknown.out.isEmpty)
+    #expect(unknown.err.contains("strings languages"))
+    let result = try fixture.run(["strings", "export", "--format", "csv", "--language", "fr", "--manifest", "private.json", "--no-input", "-o", "-"])
+    #expect(result.status == 0)
+    #expect(result.err.contains("private.json"))
+    #expect(try parseCSV(result.out).count == 3)
+    #expect(try manifestEntries(fixture, path: "private.json").count == 2)
+    #expect(!result.out.contains("manifest"))
+    for path in ["translations", "translations.CSV", "translations.txt"] {
+        let success = try fixture.run(["strings", "export", "--format", "csv", "--language", "fr", "-o", path])
+        #expect(success.status == 0)
+        #expect(success.out.isEmpty)
+        #expect(try parseCSV(String(contentsOf: fixture.root.appendingPathComponent(path), encoding: .utf8)).count == 3)
+        #expect(try manifestEntries(fixture, path: path + ".manifest.json").count == 2)
+    }
 }
 
 @Test(arguments: [
     #"{"localizations":{"fr":{"substitutions":{}}}}"#,
     #"{"localizations":{"en":{"substitutions":{}},"fr":{"stringUnit":{"state":"new","value":"x"}}}}"#,
     #"{"localizations":{"en":{"variations":{"plural":{"other":{"stringUnit":{"state":"translated","value":"Items"}}}}}}}"#,
+    #"{"localizations":{"de":{"variations":{"plural":{"other":{"stringUnit":{"state":"translated","value":"Dinge"}}}}}}}"#,
     #"{"comment":42,"localizations":{"fr":{"stringUnit":{"state":"new","value":"x"}}}}"#,
     #"{"localizations":{"fr":{"stringUnit":{"state":"future","value":"x"}}}}"#
 ])
-func exportUnsupportedSelectionsLeaveOutputUntouched(_ entry: String) throws {
+func vendorUnsupportedSelectionsPreserveBothFiles(_ entry: String) throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
     try fixture.write("A.xcstrings", catalog)
     try fixture.write("Z.xcstrings", "{\"version\":\"1.0\",\"sourceLanguage\":\"en\",\"strings\":{\"Bad\":\(entry),\"Anchor\":{\"localizations\":{\"fr\":{}}}}}")
-    try fixture.write("handoff.json", "keep me")
-    let result = try fixture.run(["strings", "export", "--language", "fr", "--output", "handoff.json", "--overwrite"])
+    try fixture.write("translations.csv", "csv")
+    try fixture.write("translations.csv.manifest.json", "manifest")
+    let result = try fixture.run(["strings", "export", "--format", "csv", "--language", "fr", "-o", "translations.csv", "--overwrite"])
     #expect(result.status == 1)
     #expect(result.out.isEmpty)
     #expect(result.err.contains("Bad"))
     #expect(result.err.contains("Xcode"))
-    #expect(try String(contentsOf: fixture.root.appendingPathComponent("handoff.json"), encoding: .utf8) == "keep me")
-    let sourceOnly = try fixture.run(["strings", "export", "--language", "en"])
-    #expect(sourceOnly.status == 0)
-    #expect(try units(sourceOnly.out).isEmpty)
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("translations.csv"), encoding: .utf8) == "csv")
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("translations.csv.manifest.json"), encoding: .utf8) == "manifest")
 }
 
-@Test func exportNestedLeavesAndConflictMetadata() throws {
+@Test func vendorIDsBindOriginalRecordsWithoutUnrelatedConflicts() throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let original = #"""
     {"version":"1.0","sourceLanguage":"en","strings":{
       "Count":{"comment":"context","localizations":{
-        "fr":{"variations":{"device":{"iphone":{"variations":{"plural":{
+        "fr":{"variations":{"plural":{
           "one":{"stringUnit":{"state":"new","value":"Un"}},
           "other":{"stringUnit":{"state":"translated","value":"Plusieurs"}}
-        }}}}}}
+        }}}
       }},
       "Unrelated":{}
     }}
     """#
     try fixture.write("Labels.xcstrings", original)
-    let args = ["strings", "export", "--language", "fr", "--status", "new"]
-    let initial = try fixture.run(args)
-    #expect(initial.status == 0)
-    let first = try #require(units(initial.out).first)
-    #expect(first["variant"] as? [[String: String]] == [["dimension": "device", "value": "iphone"], ["dimension": "plural", "value": "one"]])
-    let destination = try #require(first["originalDestination"] as? [String: [String: String]])
-    #expect(destination == ["stringUnit": ["state": "new", "value": "Un"]])
-    let repeated = try fixture.run(args)
-    #expect(repeated.out == initial.out)
+    let args = ["strings", "export", "--format", "csv", "--language", "fr", "--status", "new", "-o", "translations.csv", "--overwrite"]
+    #expect(try fixture.run(args).status == 0)
+    let firstEntry = try #require(manifestEntries(fixture).first)
+    let first = try #require(firstEntry["record"] as? [String: Any])
+    #expect((first["originalDestination"] as? [String: [String: String]]) == ["stringUnit": ["state": "new", "value": "Un"]])
     for (old, new, sourceChanges, destinationChanges) in [
+        ("Count", "Count", false, false),
         ("Plusieurs", "Beaucoup", false, false),
         ("Unrelated", "OtherKey", false, false),
         ("context", "changed comment", true, false),
         ("Un\"", "Une\"", false, true)
     ] {
         try fixture.write("Labels.xcstrings", original.replacingOccurrences(of: old, with: new))
-        let result = try fixture.run(args)
-        #expect(result.status == 0)
-        let record = try #require(units(result.out).first)
+        #expect(try fixture.run(args).status == 0)
+        let entry = try #require(manifestEntries(fixture).first)
+        let record = try #require(entry["record"] as? [String: Any])
         #expect((record["sourceFingerprint"] as? String != first["sourceFingerprint"] as? String) == sourceChanges)
         #expect((record["destinationFingerprint"] as? String != first["destinationFingerprint"] as? String) == destinationChanges)
-        #expect((record["recordFingerprint"] as? String != first["recordFingerprint"] as? String) == (sourceChanges || destinationChanges))
+        #expect((entry["id"] as? String != firstEntry["id"] as? String) == (sourceChanges || destinationChanges))
+        let rows = try parseCSV(String(contentsOf: fixture.root.appendingPathComponent("translations.csv"), encoding: .utf8))
+        #expect(rows[1][0] == entry["id"] as? String)
     }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).allSatisfy { !$0.hasPrefix(".koshops-") })
 }
 
-@Test(arguments: ["Desktop", "Desktop/"], [false, true])
-func exportDirectoryOutputRequestsFilename(_ output: String, _ overwrite: Bool) throws {
+@Test func jsonExportRemainsDefaultWithoutManifest() throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
     try fixture.write("Labels.xcstrings", catalog)
-    try fixture.write("Desktop/keep.txt", "keep me")
-    let result = try fixture.run(["strings", "export", "--language", "fr", "--output", output, "--no-input"] + (overwrite ? ["--overwrite"] : []))
-    #expect(result.status == 1)
-    #expect(result.out.isEmpty)
-    #expect(result.err.contains("is a directory"))
-    #expect(result.err.contains("Provide a filename"))
-    #expect(result.err.contains("--output"))
-    #expect(!result.err.contains("NSCocoaErrorDomain"))
-    #expect(!result.err.contains(".koshops-export-"))
-    #expect(!result.err.contains("--overwrite"))
-    #expect(try String(contentsOf: fixture.root.appendingPathComponent("Desktop/keep.txt"), encoding: .utf8) == "keep me")
-    #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.appendingPathComponent("Desktop").path) == ["keep.txt"])
-    #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).allSatisfy { !$0.hasPrefix(".koshops-export-") })
+    let result = try fixture.run(["strings", "export", "--language", "fr", "--no-input"])
+    #expect(result.status == 0)
+    #expect(result.err.isEmpty)
+    let records = try units(result.out)
+    #expect(records.count == 2)
+    let missing = try #require(records.first { $0["key"] as? String == "Missing" })
+    #expect(missing["status"] as? String == "missing")
+    #expect(missing["translation"] as? String == "")
+    #expect(missing["statusUpdate"] as? String == "")
+    #expect(missing["originalDestination"] is NSNull)
+    #expect(missing["sourceFingerprint"] is String)
+    let file = try fixture.run(["strings", "export", "--language", "fr", "--format", "json", "-o", "translations.json"])
+    #expect(file.status == 0)
+    #expect(file.out.isEmpty)
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("translations.json"), encoding: .utf8) == result.out)
+    #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("translations.json.manifest.json").path))
 }
 
-@Test(arguments: ["json", "csv"])
-func exportRejectsConflictingFileExtensions(_ format: String) throws {
+@Test func jsonExportPreservesFileSafetyAndMatchesCSVManifest() throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
     try fixture.write("Labels.xcstrings", catalog)
-    let conflicting = format == "json" ? "csv" : "json"
-    // Omit --format for JSON to cover the default format as well.
-    let arguments = ["strings", "export", "--language", "fr", "--no-input"] + (format == "json" ? [] : ["--format", format])
-    for suffix in [conflicting, conflicting.uppercased()] {
-        let path = "translations." + suffix
-        let output = fixture.root.appendingPathComponent(path)
-        let rejected = try fixture.run(arguments + ["--output", path])
-        #expect(rejected.status == 1)
-        #expect(rejected.out.isEmpty)
-        #expect(rejected.err.contains("selected format is \(format)"))
-        #expect(rejected.err.contains("--format \(conflicting)"))
-        #expect(rejected.err.contains("translations.\(format)"))
-        #expect(!FileManager.default.fileExists(atPath: output.path))
-        try fixture.write(path, "existing handoff")
-        let overwrite = try fixture.run(arguments + ["--output", path, "--overwrite"])
-        #expect(overwrite.status == 1)
-        #expect(overwrite.out.isEmpty)
-        #expect(try String(contentsOf: output, encoding: .utf8) == "existing handoff")
-        try FileManager.default.removeItem(at: output)
+    let args = ["strings", "export", "--language", "fr"]
+    let original = try fixture.run(args)
+    #expect(original.status == 0)
+    let csv = try fixture.run(args + ["--format", "csv", "-o", "translations.csv"])
+    #expect(csv.status == 0)
+    let records = try manifestEntries(fixture).map { try #require($0["record"] as? [String: Any]) }
+    #expect(NSArray(array: records).isEqual(to: try units(original.out)))
+    let invalidManifest = try fixture.run(args + ["--manifest", "unused.json"])
+    #expect(invalidManifest.status == 64)
+    #expect(invalidManifest.out.isEmpty)
+    #expect(invalidManifest.err.contains("only used with CSV"))
+    #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("unused.json").path))
+    for path in ["invalid.csv", "invalid.CSV", ".", "Labels.xcstrings"] {
+        let invalid = try fixture.run(args + ["-o", path, "--overwrite"])
+        #expect(invalid.status == 1)
+        #expect(invalid.out.isEmpty)
     }
-    for path in ["translations." + format, "translations." + format.uppercased(), "translations", "translations.txt", "-"] {
-        let result = try fixture.run(arguments + ["--output", path])
-        #expect(result.status == 0)
-        let text = path == "-" ? result.out : try String(contentsOf: fixture.root.appendingPathComponent(path), encoding: .utf8)
-        if format == "json" { #expect(try units(text).count == 2) }
-        else { #expect(try parseCSV(text).count == 3) }
-        if path == "-" { #expect(result.err.isEmpty) }
-        else {
-            #expect(result.out.isEmpty)
-            try FileManager.default.removeItem(at: fixture.root.appendingPathComponent(path))
-        }
-    }
+    try fixture.write("export.json", "keep me")
+    #expect(try fixture.run(args + ["-o", "export.json"]).status == 1)
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("export.json"), encoding: .utf8) == "keep me")
+    #expect(try fixture.run(args + ["-o", "export.json", "--overwrite"]).status == 0)
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("export.json"), encoding: .utf8) == original.out)
 }
