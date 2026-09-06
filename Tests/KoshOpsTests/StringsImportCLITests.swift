@@ -101,7 +101,7 @@ func importScopesStaleConflictsToAffectedRecords(_ edit: String) throws {
     try fixture.write("Labels.xcstrings", changed)
     let result = try fixture.run(["strings", "import", "--dry-run", "--json"], stdin: encoded(records))
     #expect(result.status == (["source", "destination"].contains(edit) ? 1 : 0))
-    if result.status != 0 { #expect(result.out.isEmpty); #expect(result.err.contains("Stale")); #expect(result.err.contains("export")) }
+    if result.status != 0 { #expect(result.out.isEmpty); #expect(result.err.contains("changed since export")); #expect(result.err.contains("export")) }
     #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == changed)
 }
 
@@ -408,4 +408,34 @@ func importCSVUsesTheSameLiveValidationAsJSON(_ mode: String) throws {
     #expect(changes.count == 1)
     #expect(changes[0]["variant"] as? [[String: String]] == [["dimension": "device", "value": "iphone"], ["dimension": "plural", "value": "one"]])
     #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == original)
+}
+
+@Test(arguments: [0, 1, 2])
+func humanPreviewDistinguishesProposedChangesFromAppliedChanges(_ count: Int) throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", importCatalog)
+    var records = try handoff(fixture)
+    if count > 0 { records[0]["translation"] = "Salut"; records[0]["statusUpdate"] = "needs_review" }
+    if count > 1 { records[1]["translation"] = "Manquant"; records[1]["statusUpdate"] = "new" }
+    let result = try fixture.run(["strings", "import", "-", "--dry-run", "--no-input"], stdin: encoded(records))
+    #expect(result.status == 0)
+    #expect(result.err.isEmpty)
+    let summary = count == 0 ? "no changes proposed" : count == 1 ? "1 proposed change." : "2 proposed changes."
+    #expect(result.out.contains(summary))
+    #expect(result.out.contains("No catalogs changed."))
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == importCatalog)
+}
+
+@Test func missingReviewStatusGuidanceIdentifiesJSONAndCSVControls() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", importCatalog)
+    var records = try handoff(fixture)
+    records[0]["translation"] = "Salut"
+    let result = try preview(fixture, records)
+    #expect(result.status == 1)
+    #expect(result.out.isEmpty)
+    #expect(result.err.contains("statusUpdate in JSON or --status-update for CSV"))
+    #expect(result.err.contains("then preview again"))
 }

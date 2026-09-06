@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "app-ux-writing": {
+      "source": "ankitgoyalio/skills",
+      "sourceType": "github",
+      "skillPath": "skills/code/app-ux-writing/SKILL.md",
+      "computedHash": "b548d0ba694bf1b7fcda3ac5dbbf374d32357b5fd43d2112b7a01ce1afa08fa4"
+    },
     "code-review": {
       "source": "mattpocock/skills",
       "sourceType": "github",

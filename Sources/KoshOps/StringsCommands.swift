@@ -3,32 +3,32 @@ import Foundation
 
 struct Strings: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Inspect, export, and preview imports for Xcode String Catalogs.",
-        discussion: "Examples:\n  koshops strings languages .\n  koshops strings list --language fr --status missing\n\nRun a subcommand with --help for options.",
+        abstract: "Inspect translations, export them for editing, and preview returned changes.",
+        discussion: "Examples:\n  koshops strings languages .\n  koshops strings list --language fr --status missing\n\nExport translations with 'koshops strings export', then preview returned changes with 'koshops strings import --dry-run'. Catalogs are never changed. Run a subcommand with --help for examples and options.",
         subcommands: [StringsLanguages.self, StringsList.self, StringsExport.self, StringsImport.self]
     )
     mutating func run() throws { throw CleanExit.helpRequest(self) }
 }
 
 struct InspectionOptions: ParsableArguments {
-    @Argument(help: "Catalog files or directories to discover (default: current directory).")
+    @Argument(help: "Paths to .xcstrings files or directories to search (default: current directory).")
     var paths: [String] = []
 
-    @Flag(help: "Emit the stable schema-version-1 JSON inspection format.")
+    @Flag(help: "Write results as JSON for scripts (schema version 1).")
     var json = false
 
-    @Flag(help: "Disable prompts (inspection never prompts).")
+    @Flag(help: "Run without prompts (this command never prompts).")
     var noInput = false
 }
 
 struct StringsLanguages: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "languages", abstract: "List source languages and translation-unit coverage per catalog.",
-        discussion: "Examples:\n  koshops strings languages . --json\n  koshops strings languages . --check-project App.xcodeproj\n\nCoverage excludes entries marked not to translate. See docs/STRINGS.md for counting and discovery rules."
+        commandName: "languages", abstract: "Show each catalog's languages and translation coverage.",
+        discussion: "Examples:\n  koshops strings languages . --json\n  koshops strings languages . --check-project App.xcodeproj\n\nCoverage counts individual translations, including each plural or device variant. Entries marked not to translate are excluded. To inspect missing translations, run 'koshops strings list . --language fr --status missing'."
     )
     @OptionGroup var options: InspectionOptions
 
-    @Option(help: "Compare with an explicit .xcodeproj or project.pbxproj, read-only; mismatches exit 1.")
+    @Option(help: "Compare languages with a .xcodeproj or project.pbxproj without changing files; differences exit 1.")
     var checkProject: String?
 
     mutating func run() throws {
@@ -41,7 +41,11 @@ struct StringsLanguages: ParsableCommand {
             for catalog in inspection.catalogs {
                 print("\(quoted(catalog.catalog)) (source: \(quoted(catalog.sourceLanguage)))")
                 for language in catalog.languages {
-                    print("  \(quoted(language.language)): \(language.translated)/\(language.total) translated; \(language.missing) missing, \(language.new) new, \(language.needsReview) needs_review, \(language.unsupported) unsupported")
+                    if language.total == 0 {
+                        print("  \(quoted(language.language)): no translations counted; the catalog is empty or its entries are marked not to translate.")
+                        continue
+                    }
+                    print("  \(quoted(language.language)): \(language.translated)/\(language.total) translated; \(language.missing) missing, \(language.new) new, \(language.needsReview) needs review, \(language.unsupported) unsupported")
                 }
             }
             if let check {
@@ -52,7 +56,7 @@ struct StringsLanguages: ParsableCommand {
             }
         }
         if let check, !check.matches {
-            FileHandle.standardError.write(Data("Error: Catalog and Xcode language declarations differ. Review catalogOnly/projectOnly in the report and reconcile the languages in Xcode. No files changed.\n".utf8))
+            FileHandle.standardError.write(Data("Error: Catalog and Xcode language declarations differ. No files changed. Review the languages listed only in the catalog or project, then update the language declarations in Xcode.\n".utf8))
             throw ExitCode.failure
         }
     }
@@ -60,20 +64,20 @@ struct StringsLanguages: ParsableCommand {
 
 struct StringsList: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "list", abstract: "Inspect individual translations and plural/device variants.",
-        discussion: "Examples:\n  koshops strings list . --language fr --status missing --status new\n  koshops strings list Localizable.xcstrings --json\n\nAll languages and statuses are included by default. Use --include-excluded to audit entries marked not to translate."
+        commandName: "list", abstract: "List translations, their statuses, and plural or device variants.",
+        discussion: "Examples:\n  koshops strings list . --language fr --status missing --status new\n  koshops strings list Localizable.xcstrings --json\n\nAll languages and statuses are included by default. Unsupported entries remain visible even with --status; inspect them in Xcode. Use --include-excluded to show entries marked not to translate."
     )
     @OptionGroup var options: InspectionOptions
-    @Option(help: "Select a catalog language; repeat to select several.") var language: [String] = []
-    @Option(help: "Select missing, new, needs_review, or translated; repeat for OR matching.") var status: [TranslationStatus] = []
-    @Flag(help: "Include entries marked not to translate in inspection.") var includeExcluded = false
+    @Option(help: "Include a catalog language, such as fr; repeat to include several.") var language: [String] = []
+    @Option(help: "Include missing, new, needs_review, or translated; repeat to match any selected status.") var status: [TranslationStatus] = []
+    @Flag(help: "Show entries marked not to translate; coverage is unchanged.") var includeExcluded = false
 
     mutating func run() throws {
         let inspection = try LocalizationWorkflow().inspect(paths: options.paths)
         let known = Set(inspection.catalogs.flatMap { $0.languages.map(\.language) })
         let unknown = Set(language).subtracting(known).sorted()
         guard unknown.isEmpty else {
-            throw ValidationError("Unknown catalog language(s): \(unknown.joined(separator: ", ")). Run 'koshops strings languages' to see available languages.")
+            throw ValidationError("Languages not found in the selected catalogs: \(unknown.joined(separator: ", ")). Run 'koshops strings languages' with the same catalog paths to see available languages.")
         }
         let units = inspection.units.filter {
             (includeExcluded || !$0.excluded) && (language.isEmpty || language.contains($0.language)) &&
@@ -86,7 +90,15 @@ struct StringsList: ParsableCommand {
                 let variant = unit.variant.map { "\($0.dimension)=\($0.value)" }.joined(separator: "/")
                 print("\(quoted(unit.catalog)) \(quoted(unit.key)) [\(quoted(unit.language))\(variant.isEmpty ? "" : "; " + quoted(variant))] \(unit.status.rawValue)\(unit.excluded ? " (excluded)" : ""): \(quoted(unit.value ?? unit.issue ?? ""))")
             }
-            if units.isEmpty { print("No translation units match.") }
+            if units.isEmpty {
+                if !language.isEmpty || !status.isEmpty {
+                    print("No translations match the selected languages and statuses. Remove --language or --status filters to broaden the results.")
+                } else if !includeExcluded {
+                    print("No translations to list. Use --include-excluded to check for entries marked not to translate.")
+                } else {
+                    print("No translations to list in the selected catalogs.")
+                }
+            }
         }
     }
 }
