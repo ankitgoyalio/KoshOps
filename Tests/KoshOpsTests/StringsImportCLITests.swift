@@ -205,7 +205,7 @@ func importCSVValidatesEveryRow(_ edit: String) throws {
     #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == importCatalog)
 }
 
-@Test func importHelpIncompleteAndApplicationUnavailable() throws {
+@Test func importHelpIncompleteAndMissingInput() throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
     for flag in ["-h", "--help"] {
@@ -216,9 +216,9 @@ func importCSVValidatesEveryRow(_ edit: String) throws {
     }
     #expect(try fixture.run(["strings", "import"]).out.contains("USAGE:"))
     let result = try fixture.run(["strings", "import", "nonexistent.json"])
-    #expect(result.status == 64)
+    #expect(result.status == 1)
     #expect(result.out.isEmpty)
-    #expect(result.err.contains("not available"))
+    #expect(result.err.contains("Cannot read"))
     #expect(try fixture.run(["strings", "import", "-", "--dry-run"], stdin: "not json").status == 1)
     #expect(try fixture.run(["strings", "import", "-", "--dry-run"], stdin: "{\"schemaVersion\":true,\"units\":[]}").status == 1)
 }
@@ -299,6 +299,12 @@ func importRejectsIneligibleLiveDestinations(_ mode: String) throws {
     #expect(preview.status == 0)
     #expect(preview.out.contains("%d article"))
     #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == changed)
+    let applied = try fixture.run(["strings", "import", "-", "--json"], stdin: encoded(records))
+    #expect(applied.status == 0)
+    let expected = changed.replacingOccurrences(of: "\"value\":\"%d objet\",\"state\":\"new\"", with: "\"value\":\"%d article\",\"state\":\"needs_review\"")
+    let actual = try Data(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"))
+    #expect((try JSONSerialization.jsonObject(with: actual) as! NSDictionary) ==
+            (try JSONSerialization.jsonObject(with: Data(expected.utf8)) as! NSDictionary))
 }
 
 // Public checksums are deliberately recomputed to test semantic validation too.
@@ -392,7 +398,8 @@ func importCSVUsesTheSameLiveValidationAsJSON(_ mode: String) throws {
     #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings/Nested.xcstrings"), encoding: .utf8) == importCatalog)
 }
 
-@Test func importFillsAnExistingEmptyNestedVariantLeaf() throws {
+@Test(arguments: [true, false])
+func importFillsAnExistingEmptyNestedVariantLeaf(_ dryRun: Bool) throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let original = #"{"version":"1.0","sourceLanguage":"en","strings":{"Hello":{"localizations":{"fr":{"variations":{"device":{"iphone":{"variations":{"plural":{"one":{},"other":{"stringUnit":{"state":"translated","value":"Bonjour"}}}}}}}}}}}}"#
@@ -401,13 +408,19 @@ func importCSVUsesTheSameLiveValidationAsJSON(_ mode: String) throws {
     records = records.filter { $0["status"] as? String == "missing" }
     #expect(records.count == 1)
     records[0]["translation"] = "Salut"; records[0]["statusUpdate"] = "new"
-    let result = try fixture.run(["strings", "import", "-", "--dry-run", "--json"], stdin: encoded(records))
+    let result = try fixture.run(["strings", "import", "-", "--json"] + (dryRun ? ["--dry-run"] : []), stdin: encoded(records))
     #expect(result.status == 0)
     let object = try #require(JSONSerialization.jsonObject(with: Data(result.out.utf8)) as? [String: Any])
     let changes = try #require(object["changes"] as? [[String: Any]])
     #expect(changes.count == 1)
     #expect(changes[0]["variant"] as? [[String: String]] == [["dimension": "device", "value": "iphone"], ["dimension": "plural", "value": "one"]])
-    #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == original)
+    let actual = try Data(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"))
+    if dryRun { #expect(actual == Data(original.utf8)) }
+    else {
+        let expected = original.replacingOccurrences(of: "\"one\":{}", with: "\"one\":{\"stringUnit\":{\"state\":\"new\",\"value\":\"Salut\"}}")
+        #expect((try JSONSerialization.jsonObject(with: actual) as! NSDictionary) ==
+                (try JSONSerialization.jsonObject(with: Data(expected.utf8)) as! NSDictionary))
+    }
 }
 
 @Test(arguments: [0, 1, 2])
@@ -438,4 +451,148 @@ func humanPreviewDistinguishesProposedChangesFromAppliedChanges(_ count: Int) th
     #expect(result.out.isEmpty)
     #expect(result.err.contains("statusUpdate in JSON or --status-update for CSV"))
     #expect(result.err.contains("then preview again"))
+}
+
+@Test(arguments: [true, false])
+func importAppliesThePreviewedJSONChanges(_ fileInput: Bool) throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", importCatalog)
+    var records = try handoff(fixture)
+    records[0]["translation"] = "Salut"
+    records[0]["statusUpdate"] = "needs_review"
+    records[1]["translation"] = "Manquant"
+    records[1]["statusUpdate"] = "new"
+    let proposed = try preview(fixture, records)
+    let applied = try fixture.run(["strings", "import"] + (fileInput ? ["handoff.json"] : []) + ["--json", "--no-input"], stdin: encoded(records))
+    #expect(applied.status == 0)
+    #expect(applied.err.isEmpty)
+    let report = try #require(JSONSerialization.jsonObject(with: Data(applied.out.utf8)) as? [String: Any])
+    #expect(report["dryRun"] as? Bool == false)
+    let previewReport = try #require(JSONSerialization.jsonObject(with: Data(proposed.out.utf8)) as? [String: Any])
+    #expect(NSArray(array: report["changes"] as! [Any]) == NSArray(array: previewReport["changes"] as! [Any]))
+    let listed = try fixture.run(["strings", "list", ".", "--language", "fr", "--json"])
+    let object = try #require(JSONSerialization.jsonObject(with: Data(listed.out.utf8)) as? [String: Any])
+    let units = try #require(object["units"] as? [[String: Any]])
+    #expect(units[0]["value"] as? String == "Salut")
+    #expect(units[0]["status"] as? String == "needs_review")
+    #expect(units[1]["value"] as? String == "Manquant")
+    #expect(units[1]["status"] as? String == "new")
+}
+
+@Test(arguments: [true, false])
+func importAppliesReturnedCSV(_ fileInput: Bool) throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", importCatalog)
+    var rows = try vendorRows(fixture)
+    rows[1][4] = "Salut, \"été\"\r\n世界"
+    rows[2][4] = "Manquant"
+    try fixture.write("returned.csv", csv(rows))
+    let args = ["strings", "import", fileInput ? "returned.csv" : "-", "--format", "csv",
+                "--manifest", "vendor.csv.manifest.json", "--status-update", "needs_review", "--json", "--no-input"]
+    let preview = try fixture.run(args + ["--dry-run"], stdin: csv(rows))
+    #expect(preview.status == 0)
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == importCatalog)
+    let result = try fixture.run(args, stdin: csv(rows))
+    #expect(result.status == 0)
+    #expect(result.err.isEmpty)
+    #expect(result.out == preview.out.replacingOccurrences(of: "\"dryRun\":true", with: "\"dryRun\":false"))
+    let document = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"))) as? [String: Any])
+    let strings = document["strings"] as! [String: [String: Any]]
+    let localizations = strings["Hello"]!["localizations"] as! [String: [String: Any]]
+    let unit = localizations["fr"]!["stringUnit"] as! [String: String]
+    #expect(unit == ["state": "needs_review", "value": "Salut, \"été\"\r\n世界"])
+}
+
+@Test func importRejectsMultiCatalogApplicationButAllowsOneAffectedCatalog() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("A/Labels.xcstrings", importCatalog)
+    try fixture.write("B/Labels.xcstrings", importCatalog)
+    var records = try handoff(fixture)
+    for index in records.indices where records[index]["key"] as? String == "Hello" {
+        records[index]["translation"] = "Salut"; records[index]["statusUpdate"] = "new"
+    }
+    let result = try fixture.run(["strings", "import", "-", "--json"], stdin: encoded(records))
+    #expect(result.status == 1)
+    #expect(result.out.isEmpty)
+    #expect(result.err.contains("multiple catalogs"))
+    #expect(result.err.contains("--dry-run"))
+    for path in ["A/Labels.xcstrings", "B/Labels.xcstrings"] {
+        #expect(try String(contentsOf: fixture.root.appendingPathComponent(path), encoding: .utf8) == importCatalog)
+    }
+    for index in records.indices where records[index]["catalog"] as? String == "B/Labels.xcstrings" {
+        records[index]["translation"] = records[index]["originalTranslation"] as? String ?? ""
+        records[index]["statusUpdate"] = ""
+    }
+    #expect(try fixture.run(["strings", "import", "-"], stdin: encoded(records)).status == 0)
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("B/Labels.xcstrings"), encoding: .utf8) == importCatalog)
+}
+
+@Test(arguments: ["statusOnly", "noop", "omitted"])
+func importStatusAndNoopPreserveUntouchedContent(_ mode: String) throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let original = #"{"version":"1.0","sourceLanguage":"en","extra":{"future":[1,true,null]},"strings":{"Hello":{"comment":"Developer context","future":42,"localizations":{"fr":{"stringUnit":{"state":"translated","value":"Bonjour"}},"xx":{"substitutions":{"future":true}}}},"Excluded":{"shouldTranslate":false,"future":{"anything":true}},"Missing":{}}}"#
+    try fixture.write("Labels.xcstrings", original)
+    let url = fixture.root.appendingPathComponent("Labels.xcstrings")
+    try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: url.path)
+    let before = try FileManager.default.attributesOfItem(atPath: url.path)
+    // Holding a hard link demonstrates that apply replaces rather than truncates the catalog.
+    try FileManager.default.linkItem(at: url, to: fixture.root.appendingPathComponent("original-copy"))
+    var records = try handoff(fixture)
+    if mode == "statusOnly" { records = [records[0]]; records[0]["statusUpdate"] = "needs_review" }
+    if mode == "omitted" { records = [] }
+    let result = try fixture.run(["strings", "import"], stdin: encoded(records))
+    #expect(result.status == 0)
+    #expect(result.err.isEmpty)
+    #expect(try String(contentsOf: fixture.root.appendingPathComponent("original-copy"), encoding: .utf8) == original)
+    let after = try FileManager.default.attributesOfItem(atPath: url.path)
+    #expect(after[.posixPermissions] as? Int == 0o640)
+    if mode == "statusOnly" {
+        #expect(result.out.contains("Applied 1 change"))
+        let expected = original.replacingOccurrences(of: "\"state\":\"translated\"", with: "\"state\":\"needs_review\"")
+        let document = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! NSDictionary
+        #expect(document == (try JSONSerialization.jsonObject(with: Data(expected.utf8)) as! NSDictionary))
+        #expect(after[.systemFileNumber] as? UInt64 != before[.systemFileNumber] as? UInt64)
+        let retry = try fixture.run(["strings", "import", "-", "--json"], stdin: encoded(records))
+        #expect(retry.status == 1)
+        #expect(retry.out.isEmpty)
+        #expect(retry.err.contains("changed since export"))
+    } else {
+        #expect(result.out.contains("No catalogs changed"))
+        #expect(try String(contentsOf: url, encoding: .utf8) == original)
+        #expect(after[.systemFileNumber] as? UInt64 == before[.systemFileNumber] as? UInt64)
+        #expect(after[.modificationDate] as? Date == before[.modificationDate] as? Date)
+    }
+}
+
+@Test(arguments: ["approval", "protected", "duplicate", "source", "destination", "placeholder", "unrelated"])
+func applyValidatesBeforeWriting(_ reason: String) throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Labels.xcstrings", importCatalog)
+    var records = try handoff(fixture)
+    records[0]["translation"] = "Salut"; records[0]["statusUpdate"] = "new"
+    var live = importCatalog
+    switch reason {
+    case "approval": records[0]["statusUpdate"] = ""
+    case "protected": records[1]["developerComments"] = "tampered"
+    case "duplicate": records.append(records[0])
+    case "source": live = live.replacingOccurrences(of: "\"Hello\":{", with: "\"Hello\":{\"comment\":\"changed\",")
+    case "destination": live = live.replacingOccurrences(of: "Bonjour", with: "Coucou")
+    case "placeholder": records[0]["translation"] = "%@"
+    default: live = live.replacingOccurrences(of: "\"Missing\":{}", with: "\"Missing\":{\"comment\":\"keep\"}")
+    }
+    try fixture.write("Labels.xcstrings", live)
+    let result = try fixture.run(["strings", "import", "-", "--json", "--no-input"], stdin: encoded(records))
+    #expect(result.status == (reason == "unrelated" ? 0 : 1))
+    if reason == "unrelated" {
+        #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8).contains("keep"))
+    } else {
+        #expect(result.out.isEmpty)
+        #expect(!result.err.isEmpty)
+        #expect(try String(contentsOf: fixture.root.appendingPathComponent("Labels.xcstrings"), encoding: .utf8) == live)
+    }
 }

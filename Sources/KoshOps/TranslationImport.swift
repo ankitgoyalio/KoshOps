@@ -1,8 +1,8 @@
 import Foundation
 
-struct ImportPreview: Encodable {
+struct ImportResult: Encodable {
     let schemaVersion = 1
-    let dryRun = true
+    let dryRun: Bool
     let changes: [TranslationChange]
 }
 
@@ -18,8 +18,9 @@ struct TranslationChange: Encodable {
 }
 
 extension LocalizationWorkflow {
-    func previewImport(input: String, format: HandoffFormat, manifest: String?, statusUpdate: String?,
-                       destination: String) throws -> ImportPreview {
+    func importTranslations(input: String, format: HandoffFormat, manifest: String?, statusUpdate: String?,
+                            destination: String, dryRun: Bool,
+                            writer: CatalogWriter = CatalogWriter()) throws -> ImportResult {
         let data = try readHandoff(input)
         let records: [[String: Any]]
         if format == .json { records = try jsonRecords(data) }
@@ -32,7 +33,8 @@ extension LocalizationWorkflow {
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw InspectionError("Invalid destination directory '\(destination)'. Set --destination to the existing directory containing the exported catalog paths.")
         }
-        var inspections: [String: LocalizationInspection] = [:]
+        var inspections: [URL: LocalizationInspection] = [:]
+        var catalogPaths: [String: URL] = [:]
         var seen = Set<Data>()
         var changes: [TranslationChange] = []
         for record in records {
@@ -43,10 +45,16 @@ extension LocalizationWorkflow {
                 let language = record["language"] as! String
                 let variant = record["variant"] as! [[String: String]]
                 let path = try catalogPath(catalog, beneath: root)
+                if let previous = catalogPaths[catalog], previous != path {
+                    throw InspectionError("Catalog path changed during validation. Restore the catalog layout and export again.")
+                }
+                catalogPaths[catalog] = path
                 let identity = try canonicalJSON([path.path, key, language, variant])
                 guard seen.insert(identity).inserted else { throw InspectionError("Duplicate record identity; keep only one row per translation unit.") }
-                if inspections[catalog] == nil { inspections[catalog] = try inspect(paths: [path.path]) }
-                let inspection = inspections[catalog]!
+                if inspections[path] == nil {
+                    inspections[path] = try inspect(paths: [path.path])
+                }
+                let inspection = inspections[path]!
                 let document = inspection.documents.values.first!
                 let sourceLanguage = document["sourceLanguage"] as! String
                 guard language != sourceLanguage else { throw InspectionError("Source-language translations cannot be imported; remove this record.") }
@@ -88,10 +96,34 @@ extension LocalizationWorkflow {
                     originalTranslation: original, originalStatus: record["status"] as! String, translation: translation, status: update))
             } catch {
                 let context = String(decoding: (try? canonicalJSON(record.filter { ["catalog", "key", "language", "variant"].contains($0.key) })) ?? Data(), as: UTF8.self)
-                throw InspectionError("Cannot preview \(context): \(error)")
+                throw InspectionError("Cannot validate \(context): \(error)")
             }
         }
-        return ImportPreview(changes: changes)
+        if !dryRun && !changes.isEmpty {
+            for change in changes {
+                guard try catalogPath(change.catalog, beneath: root) == catalogPaths[change.catalog] else {
+                    throw InspectionError("Catalog path changed during import. Restore the catalog layout and export again before retrying.")
+                }
+            }
+            let paths = Set(changes.map { catalogPaths[$0.catalog]! })
+            guard paths.count == 1 else {
+                throw InspectionError("Applying changes to multiple catalogs is not available yet. Use --dry-run for a complete preview, then return records for one catalog at a time.")
+            }
+            let path = paths.first!
+            let inspection = inspections[path]!
+            let snapshot = inspection.contents.values.first!
+            var document = inspection.documents.values.first!
+            for change in changes {
+                let keys = ["strings", change.key, "localizations", change.language] +
+                    change.variant.flatMap { ["variations", $0.dimension, $0.value] }
+                setTranslation(in: &document, path: keys[...],
+                               leaf: ["stringUnit": ["value": change.translation, "state": change.status]])
+            }
+            let output = try JSONSerialization.data(withJSONObject: document,
+                                                    options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) + Data("\n".utf8)
+            try writer.replace(path, original: snapshot, updated: output)
+        }
+        return ImportResult(dryRun: dryRun, changes: changes)
     }
 }
 
@@ -179,4 +211,11 @@ private func validVariants(_ variants: [[String: String]]) -> Bool {
     variants.allSatisfy {
         Set($0.keys) == ["dimension", "value"] && ["plural", "device"].contains($0["dimension"]!) && !$0["value"]!.isEmpty
     } && Set(variants.map { $0["dimension"]! }).count == variants.count
+}
+
+private func setTranslation(in object: inout [String: Any], path: ArraySlice<String>, leaf: [String: Any]) {
+    guard let key = path.first else { object = leaf; return }
+    var child = object[key] as? [String: Any] ?? [:]
+    setTranslation(in: &child, path: path.dropFirst(), leaf: leaf)
+    object[key] = child
 }

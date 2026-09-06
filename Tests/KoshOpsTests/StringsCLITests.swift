@@ -614,7 +614,7 @@ func vendorUnsupportedSelectionsPreserveBothFiles(_ entry: String) throws {
     #expect(export.out.split(whereSeparator: \.isWhitespace).joined(separator: " ").contains("translations marked missing, new, or needs review"))
     #expect(export.out.contains("needs_review"))
     let preview = try fixture.run(["strings", "import", "--help"])
-    #expect(preview.out.contains("Applying changes is not available yet"))
+    #expect(preview.out.contains("apply changes to one catalog"))
     #expect(preview.out.contains("review status"))
     #expect(preview.out.split(whereSeparator: \.isWhitespace).joined(separator: " ").contains("same catalog root"))
 }

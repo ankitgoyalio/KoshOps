@@ -49,6 +49,7 @@ struct LocalizationInspection {
     let catalogs: [CatalogInspection]
     let units: [TranslationUnit]
     let documents: [String: [String: Any]]
+    let contents: [String: Data]
 }
 
 /// The single entry point for localization workflows; parsing and discovery stay here.
@@ -87,6 +88,7 @@ struct LocalizationWorkflow {
         }
         var summaries: [CatalogInspection] = []
         var documents: [String: [String: Any]] = [:]
+        var contents: [String: Data] = [:]
         var units: [TranslationUnit] = []
         for url in catalogs.sorted(by: { $0.path < $1.path }) {
             let prefix = root.path == "/" ? "/" : root.path + "/"
@@ -95,8 +97,9 @@ struct LocalizationWorkflow {
             summaries.append(result.0)
             units += result.1
             documents[identity] = result.2
+            contents[identity] = result.3
         }
-        return LocalizationInspection(catalogs: summaries, units: units, documents: documents)
+        return LocalizationInspection(catalogs: summaries, units: units, documents: documents, contents: contents)
     }
 
     private func discover(_ directory: URL, catalogs: inout Set<URL>) throws {
@@ -118,10 +121,12 @@ struct LocalizationWorkflow {
         }
     }
 
-    private func readCatalog(_ url: URL, identity: String) throws -> (CatalogInspection, [TranslationUnit], [String: Any]) {
+    private func readCatalog(_ url: URL, identity: String) throws -> (CatalogInspection, [TranslationUnit], [String: Any], Data) {
         let object: [String: Any]
+        let contents: Data
         do {
-            guard let decoded = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else {
+            contents = try Data(contentsOf: url)
+            guard let decoded = try JSONSerialization.jsonObject(with: contents) as? [String: Any] else {
                 throw InspectionError("Expected a JSON object")
             }
             object = decoded
@@ -173,7 +178,7 @@ struct LocalizationWorkflow {
             }
             return result
         }
-        return (CatalogInspection(catalog: identity, sourceLanguage: source, languages: coverage), units, object)
+        return (CatalogInspection(catalog: identity, sourceLanguage: source, languages: coverage), units, object, contents)
     }
 
     private func isBoolean(_ value: Any?) -> Bool {
