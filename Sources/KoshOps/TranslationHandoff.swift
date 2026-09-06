@@ -33,7 +33,7 @@ extension LocalizationWorkflow {
         let inspection = try inspect(paths: paths)
         let unknown = Set(languages).subtracting(inspection.catalogs.flatMap { $0.languages.map(\.language) })
         guard unknown.isEmpty else {
-            throw InspectionError("Unknown catalog language(s): \(unknown.sorted().joined(separator: ", ")). Run 'koshops strings languages' to see available languages.")
+            throw InspectionError("Languages not found in the selected catalogs: \(unknown.sorted().joined(separator: ", ")). Run 'koshops strings languages' with the same catalog paths to see available languages.")
         }
         let selectedStatuses = statuses.isEmpty ? ["missing", "new", "needs_review"] : statuses
         let sourceLanguages = Dictionary(uniqueKeysWithValues: inspection.catalogs.map { ($0.catalog, $0.sourceLanguage) })
@@ -110,7 +110,7 @@ func handoffRecord(_ unit: TranslationUnit, document: [String: Any], sourceUnits
 }
 
 private func handoffError(_ unit: TranslationUnit, _ reason: String) -> InspectionError {
-    InspectionError("Cannot prepare handoff for '\(unit.catalog)' key '\(unit.key)' language '\(unit.language)' variant '\(unit.variant.map { "\($0.dimension)=\($0.value)" }.joined(separator: "/"))': \(reason) Inspect this entry in Xcode or select other languages/statuses.")
+    InspectionError("Cannot prepare translations for '\(unit.catalog)' key '\(unit.key)' language '\(unit.language)' variant '\(unit.variant.map { "\($0.dimension)=\($0.value)" }.joined(separator: "/"))': \(reason) Unsupported entries block export even when excluded by --status. Inspect this entry in Xcode or export other languages.")
 }
 
 func variantIdentity(_ variants: [Variant]) -> [[String: String]] {

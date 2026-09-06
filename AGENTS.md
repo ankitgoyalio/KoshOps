@@ -1,61 +1,47 @@
 # KoshOps agent guide
 
-KoshOps is a human-first Swift CLI for automating Xcode asset management. Treat
-its command surface as a product interface used both at a terminal and in
-scripts.
+KoshOps is a Swift CLI for Xcode asset management, currently focused on String
+Catalog inspection and translation exchange.
 
 ## Task routing
 
-- For any change or review involving commands, arguments, flags, help, output,
-  errors, prompts, exit status, configuration, environment variables, or CLI
-  documentation, read [`docs/CLI_DESIGN.md`](docs/CLI_DESIGN.md) before deciding
-  on behavior. Apply every relevant item in its review checklist.
-- Use Apple's Swift Argument Parser for command structure and parsing. Inspect
-  `Package.swift` and the existing command types rather than duplicating package
-  details here.
+- **Code:** Before implementation or review, read
+  [`CODING_STANDARDS.md`](CODING_STANDARDS.md), including its release check before
+  changing existing behavior.
+- **CLI:** Before changing or reviewing command syntax, output, errors, prompts,
+  exit behavior, configuration, environment variables, or CLI documentation, read
+  [`docs/CLI_DESIGN.md`](docs/CLI_DESIGN.md). Satisfy every applicable checklist
+  item; document intentional exceptions beside the change.
+- **CLI copy and naming:** Before planning, reviewing, or editing, use
+  [`app-ux-writing`](.agents/skills/app-ux-writing/SKILL.md). Read and maintain
+  [`WORD_LIST.md`](WORD_LIST.md) for shared voice and terminology decisions.
+- **Localization:** Before changing or reviewing catalog discovery, inspection,
+  export, import, or exchange schemas, read [`docs/STRINGS.md`](docs/STRINGS.md)
+  for the behavior contracts.
+- **Domain:** Before exploring domain behavior or writing domain documentation,
+  read [`docs/agents/domain.md`](docs/agents/domain.md).
+- **Issues and specs:** Before tracker operations, read
+  [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+- **Triage:** Before triaging, read
+  [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
 
 ## Working agreement
 
-- Preserve unrelated working-tree changes; this repository may be under active
-  construction.
 - Keep domain behavior separate from `ParsableCommand` adapters so it can be
   tested without invoking a process.
-- Keep public CLI behavior deliberate and consistent across subcommands. Treat
-  command names, flags, structured output, exit codes, configuration keys, and
-  environment variables as compatibility commitments.
-- Add behavioral tests for user-visible success and failure paths. Cover help or
-  parsing behavior when the command surface changes.
+- Preserve unrelated working-tree changes.
 
 ## Subagents
 
-For every subagent spawn, explicitly pass the model and reasoning effort from
-the `[agents]` defaults in [`.codex/config.toml`](.codex/config.toml). Use
-`fork_turns="none"` with a self-contained task brief, or a bounded history fork
-when needed; full-history forks inherit the parent model and cannot accept
-these overrides. Apply this policy to nested subagents too. Change these
-settings only when the user explicitly requests it.
+For every spawn, including nested subagents, explicitly pass the model and
+reasoning effort from `[agents]` in [`.codex/config.toml`](.codex/config.toml).
+Use `fork_turns="none"` with a self-contained brief or a bounded history fork.
+Change these settings only at the user's explicit request.
 
 ## Completion
 
-Run `swift test` for every code change. For a CLI-surface change, also inspect
-the affected `--help` output and exercise representative success, user-error,
-and non-interactive paths as applicable. The task is complete when tests pass
-and every relevant item in `docs/CLI_DESIGN.md` is satisfied or an intentional
-exception is documented beside the change.
-
-## Agent skills
-
-### Issue tracker
-
-Track issues and specs in GitHub Issues. Before issue operations, read
-`docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Use the five canonical triage labels. Before triaging, read
-`docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Use a single-context layout. Before exploring domain behavior, read
-`docs/agents/domain.md`.
+- Add behavioral tests for user-visible success and failure paths; cover help
+  and parsing when the command surface changes.
+- Run `swift test` for every code change and resolve failures before completion.
+- For CLI-surface changes, inspect affected `--help` output and exercise
+  representative success, user-error, and non-interactive paths as applicable.

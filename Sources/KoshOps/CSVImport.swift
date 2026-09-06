@@ -5,7 +5,7 @@ func csvRecords(_ data: Data, manifest: String, statusUpdate: String?) throws ->
     let object = try handoffObject(readHandoff(manifest))
     guard Set(object.keys) == ["schemaVersion", "kind", "entries"], object["kind"] as? String == "vendorManifest",
           let entries = object["entries"] as? [[String: Any]] else {
-        throw InspectionError("Invalid CSV manifest. Use the original version-1 vendorManifest from export.")
+        throw InspectionError("Invalid CSV manifest. Use the original companion JSON manifest created by the CSV export.")
     }
     var originals: [String: [String: Any]] = [:]
     for entry in entries {
@@ -34,7 +34,7 @@ func csvRecords(_ data: Data, manifest: String, statusUpdate: String?) throws ->
     var seen = Set<String>()
     var records: [[String: Any]] = []
     for (offset, row) in rows.dropFirst().enumerated() {
-        guard row.count == 5 else { throw InspectionError("CSV row \(offset + 2) must have five cells. Restore the exported columns and CSV quoting.") }
+        guard row.count == 5 else { throw InspectionError("CSV row \(offset + 2) must have five columns. Restore the exported columns and CSV quoting.") }
         guard let entry = originals[row[0]], seen.insert(row[0]).inserted else {
             throw InspectionError("Unknown or duplicate CSV id at row \(offset + 2). Restore original IDs and keep one row per unit.")
         }

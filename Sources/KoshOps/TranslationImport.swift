@@ -30,7 +30,7 @@ extension LocalizationWorkflow {
         let root = URL(fileURLWithPath: destination).standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw InspectionError("Invalid destination directory. Supply --destination with an existing catalog root.")
+            throw InspectionError("Invalid destination directory '\(destination)'. Set --destination to the existing directory containing the exported catalog paths.")
         }
         var inspections: [String: LocalizationInspection] = [:]
         var seen = Set<Data>()
@@ -49,7 +49,7 @@ extension LocalizationWorkflow {
                 let inspection = inspections[catalog]!
                 let document = inspection.documents.values.first!
                 let sourceLanguage = document["sourceLanguage"] as! String
-                guard language != sourceLanguage else { throw InspectionError("Source-language updates are read-only; remove this record.") }
+                guard language != sourceLanguage else { throw InspectionError("Source-language translations cannot be imported; remove this record.") }
                 guard let unit = inspection.units.first(where: {
                     $0.key == key && $0.language == language && variantIdentity($0.variant) == variant
                 }) else { throw InspectionError("Unknown key, language, or variant; export existing catalog units again.") }
@@ -61,7 +61,7 @@ extension LocalizationWorkflow {
                 let original = record["originalTranslation"] as? String
                 let textChanged = translation != (original ?? "")
                 guard !textChanged || !update.isEmpty else {
-                    throw InspectionError("Changed translation requires explicit statusUpdate (new, needs_review, or translated); set review intent and retry.")
+                    throw InspectionError("Changed translation has no review status. Set statusUpdate in JSON or --status-update for CSV to new, needs_review, or translated, then preview again.")
                 }
                 if !textChanged && (update.isEmpty || update == record["status"] as? String) { continue }
                 guard !translation.isEmpty else { throw InspectionError("Empty translation update; provide nonempty text or omit the record.") }
@@ -70,13 +70,13 @@ extension LocalizationWorkflow {
                                                  status: unit.status, value: unit.value, excluded: unit.excluded, issue: unit.issue)
                 let current = try handoffRecord(identified, document: document, sourceUnits: sources)
                 guard current["sourceFingerprint"] as? String == record["sourceFingerprint"] as? String else {
-                    throw InspectionError("Stale source conflict; export fresh context and reconcile this translation.")
+                    throw InspectionError("The source text or context changed since export. Export again, review this translation against the updated source, then preview again.")
                 }
                 guard current["destinationFingerprint"] as? String == record["destinationFingerprint"] as? String else {
-                    throw InspectionError("Stale destination conflict; export again and reconcile concurrent changes.")
+                    throw InspectionError("The catalog translation changed since export. Export again, compare the returned translation with the current catalog text, then preview again.")
                 }
                 guard current["recordFingerprint"] as? String == record["recordFingerprint"] as? String else {
-                    throw InspectionError("Protected record fields do not match the catalog; export a fresh handoff.")
+                    throw InspectionError("Protected record fields do not match the catalog; export a fresh translation file.")
                 }
                 // Matching source variants are authoritative; otherwise all supplied source
                 // variants must permit the translation. Never guess plural-category mappings.
@@ -88,7 +88,7 @@ extension LocalizationWorkflow {
                     originalTranslation: original, originalStatus: record["status"] as! String, translation: translation, status: update))
             } catch {
                 let context = String(decoding: (try? canonicalJSON(record.filter { ["catalog", "key", "language", "variant"].contains($0.key) })) ?? Data(), as: UTF8.self)
-                throw InspectionError("Cannot import \(context): \(error)")
+                throw InspectionError("Cannot preview \(context): \(error)")
             }
         }
         return ImportPreview(changes: changes)
@@ -97,13 +97,13 @@ extension LocalizationWorkflow {
 
 func readHandoff(_ path: String) throws -> Data {
     do { return try path == "-" ? FileHandle.standardInput.readToEnd() ?? Data() : Data(contentsOf: URL(fileURLWithPath: path)) }
-    catch { throw InspectionError("Cannot read handoff or manifest: \(error.localizedDescription). Supply a readable file or pipe UTF-8 input to '-'.") }
+    catch { throw InspectionError("Cannot read the translation file or companion manifest: \(error.localizedDescription). Check the file path and read permissions. For translation input from stdin, use '-'; manifests must be files.") }
 }
 
 func handoffObject(_ data: Data) throws -> [String: Any] {
     guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let version = object["schemaVersion"], (try? canonicalJSON(version)) == Data("1".utf8) else {
-        throw InspectionError("Malformed JSON or unsupported schemaVersion. Export a fresh version-1 handoff.")
+        throw InspectionError("Malformed JSON or unsupported schemaVersion. Export a fresh JSON translation file or companion manifest (schema version 1).")
     }
     return object
 }
@@ -111,7 +111,7 @@ func handoffObject(_ data: Data) throws -> [String: Any] {
 private func jsonRecords(_ data: Data) throws -> [[String: Any]] {
     let object = try handoffObject(data)
     guard Set(object.keys) == ["schemaVersion", "units"], let records = object["units"] as? [[String: Any]] else {
-        throw InspectionError("Invalid JSON handoff fields. Supply schemaVersion and a units array from export.")
+        throw InspectionError("Invalid JSON translation file fields. Supply schemaVersion and a units array from export.")
     }
     return records
 }
@@ -153,7 +153,7 @@ func validateRecord(_ record: [String: Any]) throws {
     let protected = record.filter { !["recordFingerprint", "translation", "statusUpdate"].contains($0.key) }
     guard try fingerprint(protected) == record["recordFingerprint"] as! String,
           try fingerprint(record["originalDestination"]!) == record["destinationFingerprint"] as! String else {
-        throw InspectionError("Protected-field changes detected. Restore the original handoff and edit only translation and statusUpdate.")
+        throw InspectionError("Protected-field changes detected. Restore the exported JSON translation file and edit only translation and statusUpdate.")
     }
 }
 

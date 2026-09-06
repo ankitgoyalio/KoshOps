@@ -170,7 +170,7 @@ koshops strings export . --language fr --format json -o translations.json
 The JSON contract is a UTF-8 object
 `{"schemaVersion":1,"units":[...]}` followed by a newline. Each unit contains the
 fields documented in the record table below. Only `translation` and
-`statusUpdate` are editable in a JSON handoff; identity, source context, original
+`statusUpdate` are editable in a JSON translation file (handoff); identity, source context, original
 state, and fingerprints remain read-only. Explicit status updates are `new`,
 `needs_review`, or `translated`; `missing` is never writable. Changed text requires
 an explicit status update; unchanged records are ignored by the future importer.
@@ -353,7 +353,7 @@ cat translations.json | koshops strings import - --dry-run --json --no-input
 koshops strings import returned.csv --format csv --manifest translations.csv.manifest.json --status-update needs_review --dry-run
 ```
 
-This incremental slice supports **validation and preview only**. Application is
+Import supports **validation and preview only**. Applying changes is
 unavailable: an invocation with input but without `--dry-run` fails before reading
 or writing catalogs. Bare `strings import` shows help. The input argument is a file
 or `-`; with `--dry-run`, omitted input reads redirected stdin. Terminal stdin is
@@ -429,7 +429,7 @@ source variant; import does not guess mappings between plural categories.
 
 Human output identifies each affected catalog/key/language/variant, old and new
 state, and proposed text, followed by a change count and confirmation that no
-catalogs were written. Text is JSON-escaped for terminal safety. `--json` emits
+catalogs were changed. Text is JSON-escaped for terminal safety. `--json` emits
 one UTF-8 object plus a newline:
 
 ```json
@@ -450,6 +450,19 @@ records validate. The report describes only deliberate updates; the importer has
 no catalog write path. Dry runs, validation failures, interruptions, and retries
 leave catalog bytes unchanged. Success emits no stderr diagnostics. Failures
 emit actionable stderr diagnostics and empty stdout. Exit statuses are `0` for
-successful preview/help, `64` for argument/option errors or unavailable application,
+successful preview/help, `64` for argument/option errors or requests to apply changes,
 and `1` for handoff, manifest, catalog, eligibility, placeholder, or conflict errors.
 There are no prompts, configuration changes, network access, or environment overrides.
+
+### Reading human results
+
+An empty filtered list suggests broadening `--language` or `--status`; an
+unfiltered empty list points to `--include-excluded` when applicable. Neither
+means all translation work is complete. A language with zero counted units is
+reported as having no translations counted, not as fully translated.
+
+An import preview reports “no changes proposed”, “1 proposed change”, or a
+plural change count, then confirms “No catalogs changed.” It validates the
+returned records; it does not apply them. If the source or catalog translation
+has changed since export, export again and compare the returned translation
+with the current content before previewing again.

@@ -124,3 +124,12 @@ For every CLI-facing change, verify all applicable statements:
 - No secret can leak through arguments, environment, output, logs, or diagnostics.
 - Any deliberate departure from this standard records its user benefit and
   compatibility impact in code comments, tests, or adjacent documentation.
+
+## Voice and terminology
+
+For CLI copy and naming, use the voice and terminology in
+[`WORD_LIST.md`](../WORD_LIST.md). Maintain shared wording decisions there.
+
+Human-readable copy may evolve. Keep JSON schemas, CSV columns, command names,
+flags, and exit statuses stable when improving wording. The root `--verbose`
+flag is currently reserved and has no effect; help states this explicitly.

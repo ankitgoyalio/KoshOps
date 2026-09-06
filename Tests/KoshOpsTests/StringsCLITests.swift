@@ -595,3 +595,63 @@ func vendorUnsupportedSelectionsPreserveBothFiles(_ entry: String) throws {
     #expect(try fixture.run(args + ["-o", "export.json", "--overwrite"]).status == 0)
     #expect(try String(contentsOf: fixture.root.appendingPathComponent("export.json"), encoding: .utf8) == original.out)
 }
+
+@Test func helpExplainsWorkflowAndFileEffects() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    for command in [[], ["strings"], ["strings", "languages"], ["strings", "list"], ["strings", "export"], ["strings", "import"]] {
+        for flag in ["-h", "--help"] {
+            let result = try fixture.run(command + [flag])
+            #expect(result.status == 0)
+            #expect(result.err.isEmpty)
+            #expect(result.out.contains("Examples:"))
+            #expect(result.out.contains("USAGE:"))
+        }
+    }
+    let export = try fixture.run(["strings", "export", "--help"])
+    #expect(export.out.contains("Replace existing JSON, CSV"))
+    #expect(export.out.contains("edit only the translation column"))
+    #expect(export.out.split(whereSeparator: \.isWhitespace).joined(separator: " ").contains("translations marked missing, new, or needs review"))
+    #expect(export.out.contains("needs_review"))
+    let preview = try fixture.run(["strings", "import", "--help"])
+    #expect(preview.out.contains("Applying changes is not available yet"))
+    #expect(preview.out.contains("review status"))
+    #expect(preview.out.split(whereSeparator: \.isWhitespace).joined(separator: " ").contains("same catalog root"))
+}
+
+@Test func emptyHumanResultsExplainScopeWithoutClaimingCompletion() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("Localizable.xcstrings", catalog)
+    let filtered = try fixture.run(["strings", "list", "--language", "fr", "--status", "needs_review", "--no-input"])
+    #expect(filtered.status == 0)
+    #expect(filtered.err.isEmpty)
+    #expect(filtered.out.contains("No translations match"))
+    #expect(filtered.out.contains("Remove --language or --status"))
+    try fixture.write("Localizable.xcstrings", #"{"version":"1.0","sourceLanguage":"en","strings":{}}"#)
+    let empty = try fixture.run(["strings", "list"])
+    #expect(empty.status == 0)
+    #expect(empty.out.contains("--include-excluded"))
+    let all = try fixture.run(["strings", "list", "--include-excluded"])
+    #expect(all.status == 0)
+    #expect(all.out.contains("No translations to list in the selected catalogs"))
+    #expect(!all.out.contains("--include-excluded"))
+    let coverage = try fixture.run(["strings", "languages"])
+    #expect(coverage.status == 0)
+    #expect(coverage.err.isEmpty)
+    #expect(coverage.out.contains("no translations counted"))
+    #expect(!coverage.out.contains("0/0"))
+}
+
+@Test func unknownLanguageGuidanceUsesTheSelectedCatalogScope() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.write("App/Localizable.xcstrings", catalog)
+    for command in ["list", "export"] {
+        let result = try fixture.run(["strings", command, "App", "--language", "zz", "--no-input"])
+        #expect(result.status == (command == "list" ? 64 : 1))
+        #expect(result.out.isEmpty)
+        #expect(result.err.contains("Languages not found in the selected catalogs: zz"))
+        #expect(result.err.contains("same catalog paths"))
+    }
+}
