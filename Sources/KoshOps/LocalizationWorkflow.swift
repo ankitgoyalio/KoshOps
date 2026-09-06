@@ -48,6 +48,7 @@ struct CatalogInspection: Encodable {
 struct LocalizationInspection {
     let catalogs: [CatalogInspection]
     let units: [TranslationUnit]
+    let documents: [String: [String: Any]]
 }
 
 /// The single entry point for localization workflows; parsing and discovery stay here.
@@ -85,6 +86,7 @@ struct LocalizationWorkflow {
             root.deleteLastPathComponent()
         }
         var summaries: [CatalogInspection] = []
+        var documents: [String: [String: Any]] = [:]
         var units: [TranslationUnit] = []
         for url in catalogs.sorted(by: { $0.path < $1.path }) {
             let prefix = root.path == "/" ? "/" : root.path + "/"
@@ -92,8 +94,9 @@ struct LocalizationWorkflow {
             let result = try readCatalog(url, identity: identity)
             summaries.append(result.0)
             units += result.1
+            documents[identity] = result.2
         }
-        return LocalizationInspection(catalogs: summaries, units: units)
+        return LocalizationInspection(catalogs: summaries, units: units, documents: documents)
     }
 
     private func discover(_ directory: URL, catalogs: inout Set<URL>) throws {
@@ -115,7 +118,7 @@ struct LocalizationWorkflow {
         }
     }
 
-    private func readCatalog(_ url: URL, identity: String) throws -> (CatalogInspection, [TranslationUnit]) {
+    private func readCatalog(_ url: URL, identity: String) throws -> (CatalogInspection, [TranslationUnit], [String: Any]) {
         let object: [String: Any]
         do {
             guard let decoded = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else {
@@ -170,7 +173,7 @@ struct LocalizationWorkflow {
             }
             return result
         }
-        return (CatalogInspection(catalog: identity, sourceLanguage: source, languages: coverage), units)
+        return (CatalogInspection(catalog: identity, sourceLanguage: source, languages: coverage), units, object)
     }
 
     private func isBoolean(_ value: Any?) -> Bool {
