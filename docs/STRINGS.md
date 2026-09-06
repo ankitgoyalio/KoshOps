@@ -275,7 +275,7 @@ IDs are `u-` followed by the protected record fingerprint. They differ across
 catalogs, keys, languages, and variants and change when protected source or
 destination state changes. Row order does not define identity. The prefix keeps
 IDs textual in spreadsheet tools. Do not edit IDs or context, and retain all five
-columns. Missing/omitted rows must never imply deletion in a future importer.
+columns. Missing/omitted rows never imply deletion on import.
 No Xcode statuses, catalog paths, fingerprints, or nested JSON cells are exposed
 to the vendor. Structured source context is descriptive; it never guesses a
 mapping between different source and target plural categories.
@@ -323,18 +323,6 @@ All manifest fields are read-only; schema field names are camelCase.
 | `statusUpdate` | Editable in JSON export; blank read-only baseline in the manifest. Explicit updates are only `new`, `needs_review`, or `translated`. `missing` is never writable. |
 
 
-### Future import requirements
-
-Import is not yet implemented. For CSV, the returned file and its original manifest will
-both be required. An importer must match IDs, reject unknown/duplicate IDs and
-protected-cell edits, verify the manifest and live catalog fingerprints, then
-apply only deliberate translation changes. The manifest's reserved `statusUpdate`
-is blank; vendors never set it. A future explicit import option such as
-`--status-update needs_review` will choose the state for changed translations.
-That option is a planned contract, not an available command today. Changed text
-must never inherit the exported original approval. Unchanged or omitted records
-must remain untouched; all normal import validation still applies.
-
 Fingerprint serialization uses Foundation `JSONSerialization` with
 `sortedKeys`, `withoutEscapingSlashes`, and `fragmentsAllowed`, UTF-8, no whitespace
 or trailing newline, then SHA-256. Version 1's hashed values contain objects,
@@ -355,3 +343,113 @@ protected-field edits, then compare source/destination fingerprints with live
 catalog state and verify the identity, language, structure, and translation
 eligibility. Hashes are conflict checks, not cryptographic authentication of a
 handoff's author. They do not authorize arbitrary new identities or new languages.
+
+## Import validation and preview
+
+```sh
+koshops strings import translations.json --dry-run
+koshops strings import translations.json --destination App --dry-run --json
+cat translations.json | koshops strings import - --dry-run --json --no-input
+koshops strings import returned.csv --format csv --manifest translations.csv.manifest.json --status-update needs_review --dry-run
+```
+
+This incremental slice supports **validation and preview only**. Application is
+unavailable: an invocation with input but without `--dry-run` fails before reading
+or writing catalogs. Bare `strings import` shows help. The input argument is a file
+or `-`; with `--dry-run`, omitted input reads redirected stdin. Terminal stdin is
+never read or prompted. `--no-input` is accepted. `--format` defaults to `json`;
+filenames do not select the encoding. `--destination` defaults to the current
+directory and must be an existing directory.
+
+Catalog identities resolve beneath that destination root. Absolute identities,
+empty or dot path components, `..`, backslashes, NULs, non-catalog suffixes, and
+symlinks escaping the root are rejected. Identities must resolve to regular catalog files. Existing in-root symlinks may resolve to
+catalogs; aliases of the same translation unit count as duplicates. Explicit
+identities may reference catalogs in directories excluded from discovery.
+
+JSON accepts the version-1 export envelope (`schemaVersion`, `units`) and exactly
+the documented record fields. Only `translation` and `statusUpdate` are editable.
+Every supplied record is checked for schema, protected-field integrity, identity,
+and eligibility. Unknown keys/languages/variants, source-language records,
+excluded entries, unsupported destinations, and duplicate identities fail the
+whole preview. Duplicate rows are rejected even when identical. Fingerprints
+are integrity/conflict checks, not signatures or authentication.
+
+A text change requires an explicit `statusUpdate` of `new`, `needs_review`, or
+`translated`; approval is never inherited. JSON permits status-only changes.
+An unchanged record has original text and a blank or original-state status update;
+it contributes no change and is not checked for stale fingerprints against live
+state. Proposed changes must match exported source and destination fingerprints.
+Unrelated keys, destination siblings, catalogs, and metadata do not cause stale
+conflicts. Changed source context, including comments and source variants, does.
+Records omitted from JSON or CSV never imply deletion and are not live-validated.
+
+Missing simple translations may be filled only for existing keys and languages
+already in the catalog. An existing empty variant leaf may be filled. Missing
+plural/device structures are never inferred. Every proposed update must have
+nonempty translation text, including status-only updates.
+
+### Returned CSV
+
+CSV requires `--format csv --manifest PATH`; the manifest must be a separate
+file and cannot read stdin. Supply the original retained manifest, with no edits.
+The five-column vendor contract remains unchanged. UTF-8 CSV accepts quoted or
+unquoted cells, doubled quotes, embedded CR/LF, and CRLF or LF record separators;
+malformed quoting, wrong columns, unknown/duplicate IDs, and protected-cell edits
+are errors. A BOM is not part of the version-1 header contract.
+
+`--status-update new|needs_review|translated` explicitly selects the status for
+**changed CSV text only**. It never changes unchanged rows. Changed text without
+this option is rejected. Use JSON for per-record or status-only review changes.
+These options are rejected for JSON input. Empty or omitted CSV rows do not
+create deletions; an empty translation in an affected row is an error. An empty
+selection is represented by the header alone, not a blank row.
+
+### Format placeholders
+
+Proposed translations must retain the source format's argument indices and types,
+including width/precision `*` arguments. Positional reordering is supported, for
+example `%@ has %d` → `%2$d pour %1$@`. Implicit and positional indexing cannot
+be mixed. Supported conversions follow [Apple's format specifiers](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Strings/Articles/formatSpecifiers.html):
+`@`, `d/i/D`, `u/o/x/X/U/O`, `a/A/e/E/f/F/g/G`, `c/C`, `s/S`, and `p`.
+Integer lengths are `hh/h/l/ll/q/j/z/t`; signedness and lengths remain distinct
+except `q` aliases `ll`. Floating `l` is equivalent to no modifier, and `L`
+is long double. String `l` selects the wide type; character modifiers are unsupported. Uppercase `D/U/O`
+alias their plain integer types; `C/S` are kept as UTF-16 types. Unsupported
+modifier/conversion combinations are rejected. Explicit indices must start at 1
+with no gaps. Repeating an index is allowed only with a consistent type.
+`%%` is a literal percent. Unsupported or malformed syntax fails closed; literal
+percent signs in these format strings must be escaped as `%%`.
+
+For structured sources, an exactly matching source variant supplies the format
+contract. When none matches, the proposed text must be compatible with every
+source variant; import does not guess mappings between plural categories.
+
+### Preview output and failure behavior
+
+Human output identifies each affected catalog/key/language/variant, old and new
+state, and proposed text, followed by a change count and confirmation that no
+catalogs were written. Text is JSON-escaped for terminal safety. `--json` emits
+one UTF-8 object plus a newline:
+
+```json
+{
+  "schemaVersion": 1,
+  "dryRun": true,
+  "changes": [{
+    "catalog": "Labels.xcstrings", "key": "Hello", "language": "fr",
+    "variant": [], "originalTranslation": "Bonjour",
+    "originalStatus": "translated", "translation": "Salut", "status": "needs_review"
+  }]
+}
+```
+
+`originalTranslation` is omitted for missing translations. Changes preserve
+handoff order; an empty preview has `changes: []`. Nothing is emitted until all
+records validate. The report describes only deliberate updates; the importer has
+no catalog write path. Dry runs, validation failures, interruptions, and retries
+leave catalog bytes unchanged. Success emits no stderr diagnostics. Failures
+emit actionable stderr diagnostics and empty stdout. Exit statuses are `0` for
+successful preview/help, `64` for argument/option errors or unavailable application,
+and `1` for handoff, manifest, catalog, eligibility, placeholder, or conflict errors.
+There are no prompts, configuration changes, network access, or environment overrides.

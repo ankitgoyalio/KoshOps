@@ -3,9 +3,9 @@ import Foundation
 
 struct Strings: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Inspect and export Xcode String Catalogs.",
+        abstract: "Inspect, export, and preview imports for Xcode String Catalogs.",
         discussion: "Examples:\n  koshops strings languages .\n  koshops strings list --language fr --status missing\n\nRun a subcommand with --help for options.",
-        subcommands: [StringsLanguages.self, StringsList.self, StringsExport.self]
+        subcommands: [StringsLanguages.self, StringsList.self, StringsExport.self, StringsImport.self]
     )
     mutating func run() throws { throw CleanExit.helpRequest(self) }
 }

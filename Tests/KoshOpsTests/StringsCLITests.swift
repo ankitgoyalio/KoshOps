@@ -3,7 +3,7 @@ import Testing
 
 private final class TestBundleMarker {}
 
-private struct Fixture {
+struct Fixture {
     let root: URL
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -14,13 +14,16 @@ private struct Fixture {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(text.utf8).write(to: url)
     }
-    func run(_ arguments: [String]) throws -> (status: Int32, out: String, err: String) {
+    func run(_ arguments: [String], stdin: String? = nil) throws -> (status: Int32, out: String, err: String) {
         let process = Process()
         let executable = Bundle(for: TestBundleMarker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("koshops")
         process.executableURL = executable
         process.arguments = arguments
         process.currentDirectoryURL = root
-        process.standardInput = FileHandle.nullDevice
+        if let stdin {
+            try write("stdin", stdin)
+            process.standardInput = try FileHandle(forReadingFrom: root.appendingPathComponent("stdin"))
+        } else { process.standardInput = FileHandle.nullDevice }
         let stdout = root.appendingPathComponent("stdout")
         let stderr = root.appendingPathComponent("stderr")
         FileManager.default.createFile(atPath: stdout.path, contents: nil)

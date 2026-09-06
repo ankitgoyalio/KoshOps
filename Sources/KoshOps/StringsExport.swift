@@ -4,7 +4,7 @@ import Foundation
 struct StringsExport: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "export", abstract: "Export JSON handoffs or a vendor CSV with a companion manifest.",
-        discussion: "Examples:\n  koshops strings export . --language fr\n  koshops strings export . --language fr --format csv -o translations.csv\n  koshops strings export . --all-languages --format csv -o translations.csv --manifest private/manifest.json\n  koshops strings export . --language fr --format csv --manifest manifest.json > translations.csv\n\nSelect --language or --all-languages. Defaults to missing, new, and needs_review. Send only the CSV; vendors edit translation. Keep the manifest for the future import workflow. See docs/STRINGS.md."
+        discussion: "Examples:\n  koshops strings export . --language fr\n  koshops strings export . --language fr --format csv -o translations.csv\n  koshops strings export . --all-languages --format csv -o translations.csv --manifest private/manifest.json\n  koshops strings export . --language fr --format csv --manifest manifest.json > translations.csv\n\nSelect --language or --all-languages. Defaults to missing, new, and needs_review. Send only the CSV; vendors edit translation. Keep the manifest for import validation with --dry-run. See docs/STRINGS.md."
     )
     @Argument(help: "Catalog files or discovery directories (default: current directory).") var paths: [String] = []
     @Option(help: "Select an existing catalog language; repeat for several.") var language: [String] = []
